@@ -146,21 +146,21 @@ app
     // Redirect GetAvailableModels to our proxy so custom models are injected.
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
       if (details.url.includes('SetCloudCodeURL')) {
-        console.log(`[Proxy Intercept] Blocked SetCloudCodeURL: ${details.url}`);
+        console.log(\`[Proxy Intercept] Blocked SetCloudCodeURL: \${details.url}\`);
         callback({ cancel: true });
         return;
       }
       if (details.url.includes('LanguageServerService/GetAvailableModels')) {
         const proxyPort = (require('./proxy').getProxyPort as () => number)();
         if (proxyPort > 0) {
-          const redirectTarget = `http://127.0.0.1:${proxyPort}/GetAvailableModels?ls=${encodeURIComponent(details.url)}`;
-          console.log(`[Proxy Intercept] Redirecting GetAvailableModels to proxy: ${redirectTarget}`);
+          const redirectTarget = \`http://127.0.0.1:\${proxyPort}/GetAvailableModels?ls=\${encodeURIComponent(details.url)}\`;
+          console.log(\`[Proxy Intercept] Redirecting GetAvailableModels to proxy: \${redirectTarget}\`);
           (callback as (opts: { cancel?: boolean; redirectURL?: string }) => void)({ redirectURL: redirectTarget });
           return;
         }
       }
       if (details.url.includes('CloudCode') || details.url.includes('LanguageServerService')) {
-        console.log(`[Proxy Intercept] Request URL: ${details.url}`);
+        console.log(\`[Proxy Intercept] Request URL: \${details.url}\`);
       }
       callback({});
     });
@@ -187,7 +187,7 @@ app
     }
 
     if (!fs.existsSync(LS_BINARY)) {
-      const msg = `language_server binary not found at:\n${LS_BINARY}\n\nPlease build/set a valid location.`;
+      const msg = \`language_server binary not found at:\\n\${LS_BINARY}\\n\\nPlease build/set a valid location.\`;
       if (HEADLESS) {
         console.error('ERROR:', msg);
       } else {
@@ -198,7 +198,7 @@ app
     }
 
     const csrf = crypto.randomUUID();
-    console.log(`Starting app (v${app.getVersion()}) with dynamic port…`);
+    console.log(\`Starting app (v\${app.getVersion()}) with dynamic port…\`);
 
     let handle: { port: number };
     const targetPort = Number(process.env.JETSKI_LS_PORT) || DYNAMIC_PORT;
@@ -206,8 +206,8 @@ app
       handle = await startAndMonitorLanguageServer(targetPort, csrf, {
         headless: HEADLESS,
         onPortChanged: (newPort: number) => {
-          const newUrl = `${WINDOW_ORIGIN}:${newPort}/`;
-          console.log(`[Auto-Restart] Port changed! Reloading all windows with URL: ${newUrl}`);
+          const newUrl = \`\${WINDOW_ORIGIN}:\${newPort}/\`;
+          console.log(\`[Auto-Restart] Port changed! Reloading all windows with URL: \${newUrl}\`);
           // Apply cert trust
           setupLocalCertTrust();
           if (!HEADLESS) {
@@ -229,12 +229,12 @@ app
       return;
     }
 
-    const url = `${WINDOW_ORIGIN}:${handle.port}/`;
-    console.log('\n' + '='.repeat(60));
-    console.log(`  Local:       ${url}`);
-    console.log(`  LS Logs:     ${getLsLogPath()}`);
-    console.log(`  Electron Logs: ${log.transports.file.getFile().path}`);
-    console.log('='.repeat(60) + '\n');
+    const url = \`\${WINDOW_ORIGIN}:\${handle.port}/\`;
+    console.log('\\n' + '='.repeat(60));
+    console.log(\`  Local:       \${url}\`);
+    console.log(\`  LS Logs:     \${getLsLogPath()}\`);
+    console.log(\`  Electron Logs: \${log.transports.file.getFile().path}\`);
+    console.log('='.repeat(60) + '\\n');
 
     if (HEADLESS) {
       // In headless mode, forward stdin to the Language Server to allow interaction via terminal.
@@ -245,7 +245,7 @@ app
       rl.on('line', (line) => {
         const lsProc = getLsProcess();
         if (lsProc && lsProc.stdin) {
-          lsProc.stdin.write(line + '\n');
+          lsProc.stdin.write(line + '\\n');
           console.log('-> Forwarded input to Language Server.');
         } else {
           console.log('Language Server process is not running.');
@@ -283,7 +283,7 @@ app
         },
         { type: 'separator' },
         {
-          label: `Open ${app.getName()}`,
+          label: \`Open \${app.getName()}\`,
           click: () => showOrCreateWindow(getLsPort()),
         },
         {
@@ -297,7 +297,7 @@ app
     }
 
     // Start checking for app updates.
-    initAutoUpdater(HEADLESS);
+    initAutoUpdater(HEADLESS, settingsService);
     hasStartedMainApplication = true;
   })
   .catch(() => {
@@ -383,7 +383,7 @@ app.on('activate', () => {
   // On Mac, re-open a window when the user clicks the dock
   // icon and no windows are open.
   if (!HEADLESS && BrowserWindow.getAllWindows().length === 0) {
-    const url = DEV_URL ?? `${WINDOW_ORIGIN}:${getLsPort()}/`;
+    const url = DEV_URL ?? \`\${WINDOW_ORIGIN}:\${getLsPort()}/\`;
     createWindow(url);
   }
 });
