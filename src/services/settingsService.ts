@@ -4,6 +4,7 @@ import { SleepBlocker } from '../utils';
 export enum SettingKey {
   RUN_IN_BACKGROUND = 'runInBackground',
   KEEP_COMPUTER_AWAKE = 'keepComputerAwake',
+  AUTO_CHECK_FOR_UPDATES = 'autoCheckForUpdates',
 }
 
 // Default values
@@ -13,6 +14,7 @@ export const DEFAULTS = new Map<SettingKey, boolean>([
   // it is on macOS and linux.
   [SettingKey.RUN_IN_BACKGROUND, process.platform !== 'win32'],
   [SettingKey.KEEP_COMPUTER_AWAKE, false],
+  [SettingKey.AUTO_CHECK_FOR_UPDATES, true],
 ]);
 
 interface StorageManager {
@@ -51,5 +53,14 @@ export class SettingsService {
   async getSetting(key: SettingKey): Promise<boolean> {
     const items = await this.storageManager.getItems();
     return items[key] === 'true';
+  }
+
+  onSettingChanged(key: SettingKey, listener: (enabled: boolean) => void): { dispose(): void } {
+    return this.storageManager.onDidChange((changes) => {
+      const val = changes[key];
+      if (val !== undefined) {
+        listener(val === null ? DEFAULTS.get(key)! : val === 'true');
+      }
+    });
   }
 }

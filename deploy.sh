@@ -28,7 +28,16 @@ ASAR_UNPACKED="${ASAR_PATH}.unpacked"
 BACKUP_ASAR_UNPACKED="${BACKUP_ASAR}.unpacked"
 
 if [ -f "$BACKUP_ASAR" ]; then
-    echo "[2/6] Backup found: $BACKUP_ASAR"
+    if [ "$ASAR_PATH" -nt "$BACKUP_ASAR" ]; then
+        echo "[2/6] New Antigravity update detected! Refreshing backup..."
+        cp "$ASAR_PATH" "$BACKUP_ASAR"
+        if [ -d "$ASAR_UNPACKED" ]; then
+            cp -R "$ASAR_UNPACKED" "$BACKUP_ASAR_UNPACKED"
+        fi
+        echo "   Backup refreshed."
+    else
+        echo "[2/6] Backup found: $BACKUP_ASAR"
+    fi
     if [ -d "$ASAR_UNPACKED" ] && [ ! -d "$BACKUP_ASAR_UNPACKED" ]; then
         echo "   Creating backup of unpacked directory..."
         cp -R "$ASAR_UNPACKED" "$BACKUP_ASAR_UNPACKED"
@@ -83,7 +92,7 @@ fi
 echo "[5/6] Packaging app.asar..."
 rm -rf "$ASAR_UNPACKED"
 
-npx -y @electron/asar pack "$TEMP_DIR" "$ASAR_PATH" --unpack-dir "node_modules"
+npx -y @electron/asar pack "$TEMP_DIR" "$ASAR_PATH"
 
 if [ $? -ne 0 ]; then
     echo "   ERROR: Packaging failed! Restoring backup..."

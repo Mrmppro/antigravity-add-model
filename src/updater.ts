@@ -2,6 +2,7 @@ import { autoUpdater } from 'electron-updater';
 import { app, BrowserWindow, dialog, Menu } from 'electron';
 import * as path from 'path';
 import { spawn } from 'child_process';
+import { SettingKey } from './services/settingsService';
 
 export enum MenuUpdateStep {
   CheckForUpdates = 'Check for Updates',
@@ -23,17 +24,58 @@ let isManualCheck = false;
 const INITIAL_CHECK_DELAY_MS = 10000; // 10 seconds
 // How often to re-check for updates after the initial check (ms)
 const CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+let updaterInitialized = false;
+let periodicCheckInterval: ReturnType<typeof setInterval> | undefined;
+
+function startAutoUpdateChecks(): void {
+  if (periodicCheckInterval) {
+    return;
+  }
+  console.log('[AutoUpdater] Starting auto update checks');
+  checkForUpdates();
+  periodicCheckInterval = setInterval(checkForUpdates, CHECK_INTERVAL_MS);
+}
+
+function stopAutoUpdateChecks(): void {
+  console.log('[AutoUpdater] Stopping auto update checks');
+  if (periodicCheckInterval) {
+    clearInterval(periodicCheckInterval);
+    periodicCheckInterval = undefined;
+  }
+}
+
+export function setAutoUpdateChecking(enabled: boolean): void {
+  if (!updaterInitialized) {
+    return;
+  }
+  if (enabled) {
+    startAutoUpdateChecks();
+  } else {
+    stopAutoUpdateChecks();
+  }
+}
 
 interface UpdaterState {
   type: string;
   update?: { version: string };
 }
 
+// The last update state broadcast to renderers.
+let lastState: UpdaterState = { type: 'idle' };
+
 /** Broadcast a state change to every open BrowserWindow. */
 export function broadcastState(state: UpdaterState): void {
+  lastState = state;
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send('updater:state-changed', state);
   }
+}
+
+/**
+ * Returns the last update state broadcast to renderers.
+ */
+export function getLastState(): UpdaterState {
+  return lastState;
 }
 
 /**
@@ -60,7 +102,7 @@ function updateMenuState(step: MenuUpdateStep): void {
  * 3. Download updates automatically in the background.
  * 4. Broadcast state to the renderer so AppUpdateButton can display progress.
  */
-export function initAutoUpdater(isHeadless: boolean): void {
+export function initAutoUpdater(isHeadless: boolean, settingsService?: { getSetting: (key: string) => Promise<boolean>; onSettingChanged: (key: string, listener: (enabled: boolean) => void) => { dispose(): void } }): void {
   // In dev mode (npm start), electron-updater skips checks because the app
   // isn't packaged. Force it to use the dev config file instead.
   if (!app.isPackaged) {
@@ -144,11 +186,23 @@ export function initAutoUpdater(isHeadless: boolean): void {
     updateMenuState(MenuUpdateStep.CheckForUpdates);
     isManualCheck = false;
   });
-  // Schedule periodic checks
-  setTimeout(() => {
-    checkForUpdates();
-    setInterval(checkForUpdates, CHECK_INTERVAL_MS);
-  }, INITIAL_CHECK_DELAY_MS);
+  // Schedule periodic checks if needed
+  updaterInitialized = true;
+  if (settingsService) {
+    setTimeout(async () => {
+      const autoCheckEnabled = await settingsService.getSetting(SettingKey.AUTO_CHECK_FOR_UPDATES);
+      setAutoUpdateChecking(autoCheckEnabled);
+    }, INITIAL_CHECK_DELAY_MS);
+    // Cancel or restart periodic checks on setting change
+    settingsService.onSettingChanged(SettingKey.AUTO_CHECK_FOR_UPDATES, (enabled: boolean) => {
+      setAutoUpdateChecking(enabled);
+    });
+  } else {
+    setTimeout(() => {
+      checkForUpdates();
+      setInterval(checkForUpdates, CHECK_INTERVAL_MS);
+    }, INITIAL_CHECK_DELAY_MS);
+  }
 }
 
 export function checkForUpdates(isManual = false): void {

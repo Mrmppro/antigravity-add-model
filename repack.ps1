@@ -24,8 +24,8 @@ if (-not (Test-Path $SourceDir)) {
     exit 1
 }
 
-# Repack using @electron/asar (excluding large/unnecessary directories)
-npx -y @electron/asar pack $SourceDir $DestAsar --unpack-dir "{node_modules,scratch,.git}"
+# Repack using @electron/asar
+npx -y @electron/asar pack $SourceDir $DestAsar
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "==============================================" -ForegroundColor Cyan

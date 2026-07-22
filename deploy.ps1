@@ -26,14 +26,36 @@ $AsarUnpacked = "$AsarPath.unpacked"
 $BackupAsarUnpacked = "$BackupAsar.unpacked"
 
 if (Test-Path $BackupAsar) {
-    Write-Host "[2/7] Yedek bulundu: $BackupAsar" -ForegroundColor Green
+    $backupSize = (Get-Item $BackupAsar).Length
+    $asarSize = (Get-Item $AsarPath).Length
+    $backupTime = (Get-Item $BackupAsar).LastWriteTime
+    $asarTime = (Get-Item $AsarPath).LastWriteTime
+
+    # Restore backup if current app.asar was truncated/shrank from prior faulty unpack flag
+    if ($asarSize -lt ($backupSize * 0.8) -and $backupSize -gt 1500000) {
+        Write-Host "[2/7] UYARI: app.asar eksik/bozulmus gorunuyor ($asarSize bytes). Orijinal yedekten geri yukleniyor..." -ForegroundColor Yellow
+        Copy-Item $BackupAsar $AsarPath -Force
+        if (Test-Path $BackupAsarUnpacked) {
+            Copy-Item $BackupAsarUnpacked $AsarUnpacked -Recurse -Force
+        }
+        Write-Host "   Orijinal yedek geri yuklendi ($backupSize bytes)." -ForegroundColor Green
+    } elseif ($asarTime -gt $backupTime -and $asarSize -ge ($backupSize * 0.8)) {
+        Write-Host "[2/7] Yeni Antigravity guncellemesi tespit edildi! Yedek yenileniyor..." -ForegroundColor Yellow
+        Copy-Item $AsarPath $BackupAsar -Force
+        if (Test-Path $AsarUnpacked) {
+            Copy-Item $AsarUnpacked $BackupAsarUnpacked -Recurse -Force
+        }
+        Write-Host "   Yedek guncellendi." -ForegroundColor Green
+    } else {
+        Write-Host "[2/7] Yedek bulundu: $BackupAsar ($backupSize bytes)" -ForegroundColor Green
+    }
     if ((Test-Path $AsarUnpacked) -and -not (Test-Path $BackupAsarUnpacked)) {
         Write-Host "   Yedek unpacked klasoru olusturuluyor..." -ForegroundColor Yellow
         Copy-Item $AsarUnpacked $BackupAsarUnpacked -Recurse -Force
         Write-Host "   Yedek unpacked klasoru olusturuldu." -ForegroundColor Green
     }
 } elseif (Test-Path $AsarPath) {
-    Write-Host "[2/7] Yedek yok - mevcut asar yedekleniyor..." -ForegroundColor Yellow
+    Write-Host "[2/7] Yedek yok - mevcuttan yedekleniyor..." -ForegroundColor Yellow
     Copy-Item $AsarPath $BackupAsar -Force
     if (Test-Path $AsarUnpacked) {
         Copy-Item $AsarUnpacked $BackupAsarUnpacked -Recurse -Force
@@ -79,10 +101,12 @@ if (Test-Path $srcRepack) {
 # 6. Tekrar paketle
 Write-Host "[5/7] app.asar paketleniyor..." -ForegroundColor Yellow
 
-# Mevcut unpacked klasorunu sil ki temiz olussun
+# Mevcut unpacked klasorunu sil ve orijinal unpacked yedeğini geri yukle
 if (Test-Path $AsarUnpacked) { Remove-Item $AsarUnpacked -Recurse -Force }
+if (Test-Path $BackupAsarUnpacked) { Copy-Item $BackupAsarUnpacked $AsarUnpacked -Recurse -Force }
 
-npx -y @electron/asar pack $TempDir $AsarPath --unpack-dir "node_modules"
+# Paketleme - node_modules klasorunu asar icinde tut (tam boyut 2MB+ korunur)
+npx -y @electron/asar pack $TempDir $AsarPath
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "   HATA: Paketleme basarisiz! Yedek geri yukleniyor..." -ForegroundColor Red
