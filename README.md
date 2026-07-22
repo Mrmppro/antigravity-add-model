@@ -665,6 +665,16 @@ Set `DEBUG=antigravity:*` for verbose logging (debug level captures stream parse
 
 ## Changelog
 
+### v2.2.0 — Antigravity v2.3.1 Compatibility
+- **Compatibility**: Updated to work with **Antigravity v2.3.1** (previously only supported up to v2.0.x)
+- **Fixed**: Solid/blank screen after patching — restored 3 missing contextBridge APIs that v2.3.1 frontend requires (`ide.isInstalled`, `electronUpdater.getState`, `electronNative.revealInFilePicker`)
+- **Fixed**: Auto-updater now properly accepts `settingsService` parameter matching v2.3.1 signature (`initAutoUpdater(isHeadless, settingsService)`)
+- **Fixed**: Restored `setAutoUpdateChecking`, `getLastState`, and settings-driven periodic update scheduling that v2.3.1 depends on
+- **Fixed**: Restored `AUTO_CHECK_FOR_UPDATES` setting key and `onSettingChanged` listener in SettingsService
+- **Fixed**: Deploy scripts no longer use `--unpack-dir "node_modules"` which was stripping node_modules from `app.asar` (879 KB instead of ~2 MB), causing broken installations
+- **Improved**: Deploy scripts now detect Antigravity version updates via file timestamp/size comparison and automatically refresh the backup
+- **Improved**: Self-healing logic added — if `app.asar` size drops below 80% of backup, it auto-restores before patching
+
 ### v2.1.0
 - **TypeScript**: Full migration — all 23 source files converted from JavaScript to TypeScript (`dist/*.js` → `src/*.ts`)
 - **New Provider**: OpenRouter support (300+ models via unified API, OpenAI-compatible format)
