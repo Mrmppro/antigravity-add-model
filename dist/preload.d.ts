@@ -15,6 +15,7 @@ interface UpdaterAPI {
     applyUpdate: () => Promise<void>;
     quitAndInstall: () => Promise<void>;
     checkForUpdates: () => Promise<void>;
+    getState: () => Promise<UpdaterState>;
 }
 interface DialogAPI {
     showOpenDialog: () => Promise<string | undefined>;
@@ -75,6 +76,10 @@ interface ElectronNativeAPI {
     zoomOut: () => void;
     resetZoom: () => void;
     openExternal: (url: string) => Promise<void>;
+    revealInFilePicker: (path: string) => Promise<void>;
+}
+interface IdeAPI {
+    isInstalled: () => Promise<boolean>;
 }
 interface CustomModelEntry {
     name: string;
@@ -111,6 +116,7 @@ declare global {
         deepLink: DeepLinkAPI;
         agent: AgentAPI;
         electronNative: ElectronNativeAPI;
+        ide: IdeAPI;
     }
 }
 export {};

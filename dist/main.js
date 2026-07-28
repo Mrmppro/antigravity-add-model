@@ -193,7 +193,7 @@ electron_1.app
         return;
     }
     if (!fs.existsSync(languageServer_1.LS_BINARY)) {
-        const msg = `language_server binary not found at:\n${languageServer_1.LS_BINARY}\n\nPlease build/set a valid location.`;
+        const msg = `language_server binary not found at:\\n${languageServer_1.LS_BINARY}\\n\\nPlease build/set a valid location.`;
         if (HEADLESS) {
             console.error('ERROR:', msg);
         }
@@ -236,11 +236,11 @@ electron_1.app
         return;
     }
     const url = `${constants_1.WINDOW_ORIGIN}:${handle.port}/`;
-    console.log('\n' + '='.repeat(60));
+    console.log('\\n' + '='.repeat(60));
     console.log(`  Local:       ${url}`);
     console.log(`  LS Logs:     ${(0, paths_1.getLsLogPath)()}`);
     console.log(`  Electron Logs: ${main_1.default.transports.file.getFile().path}`);
-    console.log('='.repeat(60) + '\n');
+    console.log('='.repeat(60) + '\\n');
     if (HEADLESS) {
         // In headless mode, forward stdin to the Language Server to allow interaction via terminal.
         const rl = readline.createInterface({
@@ -250,7 +250,7 @@ electron_1.app
         rl.on('line', (line) => {
             const lsProc = (0, languageServer_1.getLsProcess)();
             if (lsProc && lsProc.stdin) {
-                lsProc.stdin.write(line + '\n');
+                lsProc.stdin.write(line + '\\n');
                 console.log('-> Forwarded input to Language Server.');
             }
             else {
@@ -301,7 +301,7 @@ electron_1.app
         ]);
     }
     // Start checking for app updates.
-    (0, updater_1.initAutoUpdater)(HEADLESS);
+    (0, updater_1.initAutoUpdater)(HEADLESS, settingsService);
     hasStartedMainApplication = true;
 })
     .catch(() => {

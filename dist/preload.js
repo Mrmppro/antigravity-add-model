@@ -21,6 +21,7 @@ const updaterAPI = {
     applyUpdate: () => electron_1.ipcRenderer.invoke('updater:apply'),
     quitAndInstall: () => electron_1.ipcRenderer.invoke('updater:quit-and-install'),
     checkForUpdates: () => electron_1.ipcRenderer.invoke('updater:check-for-updates'),
+    getState: () => electron_1.ipcRenderer.invoke('updater:get-state'),
 };
 const dialogAPI = {
     showOpenDialog: () => electron_1.ipcRenderer.invoke('dialog:open-workspace'),
@@ -97,6 +98,10 @@ const electronNativeAPI = {
         electron_1.webFrame.setZoomLevel(0);
     },
     openExternal: (url) => electron_1.ipcRenderer.invoke('shell:open-external', url),
+    revealInFilePicker: (path) => electron_1.ipcRenderer.invoke('shell:reveal-in-file-picker', path),
+};
+const ideAPI = {
+    isInstalled: () => electron_1.ipcRenderer.invoke('ide:is-installed'),
 };
 // ─── Expose all APIs via contextBridge ──────────────────────────────────────
 electron_1.contextBridge.exposeInMainWorld('electronUpdater', updaterAPI);
@@ -108,6 +113,7 @@ electron_1.contextBridge.exposeInMainWorld('extensions', extensionsAPI);
 electron_1.contextBridge.exposeInMainWorld('deepLink', deepLinkAPI);
 electron_1.contextBridge.exposeInMainWorld('agent', agentAPI);
 electron_1.contextBridge.exposeInMainWorld('electronNative', electronNativeAPI);
+electron_1.contextBridge.exposeInMainWorld('ide', ideAPI);
 // ─── Custom Models UI Injection ─────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
     function findRefreshButton() {

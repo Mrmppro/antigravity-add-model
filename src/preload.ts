@@ -295,12 +295,12 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // ─── Provider Icons & Status Helpers ──────────────────────────────
   const PROVIDER_ICONS: Record<string, string> = {
-    openai: \`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 17l10 5 10-5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 12l10 5 10-5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>\`,
-    anthropic: \`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="8" width="4" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="10" y="5" width="4" height="14" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="17" y="2" width="4" height="20" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>\`,
-    google: \`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.5"/><path d="M12 4a8 8 0 0 1 5.66 13.66L12 12V4z" fill="currentColor" fill-opacity="0.2"/></svg>\`,
-    ollama: \`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="3" stroke="currentColor" stroke-width="1.5"/><circle cx="9" cy="10" r="1.5" fill="currentColor"/><circle cx="15" cy="10" r="1.5" fill="currentColor"/><path d="M8 15c1 1.5 3 2 4 2s3-.5 4-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>\`,
-    openrouter: \`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="12" r="3" fill="currentColor" fill-opacity="0.3"/></svg>\`,
-    custom: \`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>\`,
+    openai: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 17l10 5 10-5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 12l10 5 10-5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`,
+    anthropic: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="8" width="4" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="10" y="5" width="4" height="14" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="17" y="2" width="4" height="20" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>`,
+    google: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.5"/><path d="M12 4a8 8 0 0 1 5.66 13.66L12 12V4z" fill="currentColor" fill-opacity="0.2"/></svg>`,
+    ollama: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="3" stroke="currentColor" stroke-width="1.5"/><circle cx="9" cy="10" r="1.5" fill="currentColor"/><circle cx="15" cy="10" r="1.5" fill="currentColor"/><path d="M8 15c1 1.5 3 2 4 2s3-.5 4-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+    openrouter: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="12" r="3" fill="currentColor" fill-opacity="0.3"/></svg>`,
+    custom: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
   };
 
   const PROVIDER_COLORS: Record<string, string> = {
@@ -340,10 +340,10 @@ window.addEventListener('DOMContentLoaded', () => {
         placeholder.style.borderRadius = '8px';
         placeholder.style.textAlign = 'center';
 
-        placeholder.innerHTML = \`
+        placeholder.innerHTML = `
                     <div style="font-size: 15px; font-weight: 600; color: #f4f4f5; margin-bottom: 4px;">No Custom Models</div>
                     <div style="font-size: 13px; color: #a1a1aa;">You currently don't have any custom models installed. Add a custom model above.</div>
-                \`;
+                `;
         contentArea.appendChild(placeholder);
       } else {
         models.forEach((model) => {
@@ -454,7 +454,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
           // Test Connection button
           const testBtn = document.createElement('button');
-          testBtn.innerHTML = \`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>\`;
+          testBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
           testBtn.style.background = 'transparent';
           testBtn.style.border = 'none';
           testBtn.style.color = '#a1a1aa';
@@ -483,7 +483,7 @@ window.addEventListener('DOMContentLoaded', () => {
             testBtn.style.color = '#fbbf24';
             testBtn.style.cursor = 'wait';
             testBtn.disabled = true;
-            testBtn.innerHTML = \`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>\`;
+            testBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>`;
 
             try {
               const result = await storageAPI.testModelConnection({
@@ -498,21 +498,21 @@ window.addEventListener('DOMContentLoaded', () => {
                 statusDot.title = result.message || 'Connected';
                 testBtn.title = 'Connected ✓';
                 testBtn.style.color = '#22c55e';
-                testBtn.innerHTML = \`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>\`;
+                testBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
               } else {
                 statusDot.style.backgroundColor = '#ef4444'; // red
                 const errMsg = result.error || 'Connection failed';
                 statusDot.title = errMsg;
                 testBtn.title = errMsg;
                 testBtn.style.color = '#ef4444';
-                testBtn.innerHTML = \`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>\`;
+                testBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
               }
             } catch (err) {
               statusDot.style.backgroundColor = '#ef4444';
               statusDot.title = 'Connection test failed';
               testBtn.title = 'Connection test failed';
               testBtn.style.color = '#ef4444';
-              testBtn.innerHTML = \`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>\`;
+              testBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
             }
 
             testBtn.style.cursor = 'pointer';
@@ -529,14 +529,14 @@ window.addEventListener('DOMContentLoaded', () => {
 
           // Delete button
           const deleteBtn = document.createElement('button');
-          deleteBtn.innerHTML = \`
+          deleteBtn.innerHTML = `
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <polyline points="3 6 5 6 21 6"></polyline>
                             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                             <line x1="10" y1="11" x2="10" y2="17"></line>
                             <line x1="14" y1="11" x2="14" y2="17"></line>
                         </svg>
-                    \`;
+                    `;
           deleteBtn.style.background = 'transparent';
           deleteBtn.style.border = 'none';
           deleteBtn.style.color = '#a1a1aa';
@@ -559,7 +559,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
           deleteBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
-            if (confirm(\`Are you sure you want to delete the model "\${model.displayName || model.name}"?\`)) {
+            if (confirm(`Are you sure you want to delete the model "${model.displayName || model.name}"?`)) {
               await storageAPI.deleteCustomModel(model.name as string);
               await renderCustomModelsList();
 
@@ -695,10 +695,10 @@ window.addEventListener('DOMContentLoaded', () => {
     modal.style.transform = 'scale(0.9) translateY(20px)';
     modal.style.transition = 'transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)';
 
-    modal.innerHTML = \`
+    modal.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
                 <div style="display: flex; align-items: center; gap: 10px;">
-                    <div id="agy-modal-provider-icon" style="width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; background-color: #10a37f18; color: #10a37f;">\${PROVIDER_ICONS.openai}</div>
+                    <div id="agy-modal-provider-icon" style="width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; background-color: #10a37f18; color: #10a37f;">${PROVIDER_ICONS.openai}</div>
                     <h3 style="margin: 0; font-size: 20px; font-weight: 600; color: #f4f4f5;">Add Custom AI Model</h3>
                 </div>
                 <button id="agy-modal-close" style="background: transparent; border: none; color: #a1a1aa; cursor: pointer; font-size: 20px; line-height: 1; padding: 4px; display: flex; align-items: center; justify-content: center; transition: color 0.15s ease;">&times;</button>
@@ -767,7 +767,7 @@ window.addEventListener('DOMContentLoaded', () => {
                     <button id="agy-btn-save" style="background-color: #e4e4e7; border: none; border-radius: 8px; color: #18181b; padding: 10px 22px; font-size: 14px; font-weight: 500; cursor: pointer; transition: background-color 0.15s ease, opacity 0.15s ease;">Save Model</button>
                 </div>
             </div>
-        \`;
+        `;
 
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
@@ -866,7 +866,7 @@ window.addEventListener('DOMContentLoaded', () => {
       validateModelId();
       if (providerSelect.value === 'google') {
         const modelId = modelInput.value.trim() || 'model-name';
-        urlInput.value = \`https://generativelanguage.googleapis.com/v1beta/models/\${modelId}:generateContent\`;
+        urlInput.value = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
         validateUrl();
       }
     });
@@ -876,7 +876,7 @@ window.addEventListener('DOMContentLoaded', () => {
       const modelId = modelInput.value.trim() || 'model-name';
 
       if (val === 'google') {
-        urlInput.value = \`https://generativelanguage.googleapis.com/v1beta/models/\${modelId}:generateContent\`;
+        urlInput.value = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
       } else {
         urlInput.value = prefilledUrls[val] || '';
       }
@@ -1033,13 +1033,13 @@ window.addEventListener('DOMContentLoaded', () => {
           cerebras: 'Cerebras', kimi: 'Kimi', fireworks: 'Fireworks',
           lmstudio: 'LM Studio', llamacpp: 'llama.cpp', nvidia: 'NVIDIA',
         };
-        displayName = \`\${modelId} (\${providerNames[provider]})\`;
+        displayName = `${modelId} (${providerNames[provider]})`;
       }
 
       const newModel: CustomModelEntry = {
         name: 'models/' + modelId,
         displayName: displayName,
-        description: \`\${displayName} custom model redirected through local proxy\`,
+        description: `${displayName} custom model redirected through local proxy`,
         provider: provider,
         apiKey: apiKey || 'none',
         apiUrl: apiUrl,
@@ -1169,7 +1169,7 @@ window.addEventListener('DOMContentLoaded', () => {
                 const modelsObj = (parsed.models || parsed.availableModels || parsed.available_models || {}) as Record<string, unknown>;
                 for (const m of customModels) {
                   const slug = 'custom-' + ((m.externalModelName || m.name || '') as string)
-                    .replace(/^models\\//, '')
+                    .replace(/^models\//, '')
                     .replace(/[^a-zA-Z0-9]+/g, '-')
                     .replace(/^-+|-+$/g, '')
                     .toLowerCase();
@@ -1214,7 +1214,7 @@ window.addEventListener('DOMContentLoaded', () => {
             const modelsObj = (parsed.models || parsed.availableModels || parsed.available_models || {}) as Record<string, unknown>;
             for (const m of customModels) {
               const slug = 'custom-' + ((m.externalModelName || m.name || '') as string)
-                .replace(/^models\\//, '')
+                .replace(/^models\//, '')
                 .replace(/[^a-zA-Z0-9]+/g, '-')
                 .replace(/^-+|-+$/g, '')
                 .toLowerCase();
