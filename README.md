@@ -665,6 +665,12 @@ Set `DEBUG=antigravity:*` for verbose logging (debug level captures stream parse
 
 ## Changelog
 
+### v2.4.2 — Antigravity v2.4.2 Compatibility & MCP Subsystem Support
+- **Compatibility**: Full support for **Antigravity v2.4.2** MCP (Model Context Protocol) subsystem.
+- **Fixed**: Solid/blank screen after patching on v2.4.2 — bridged `mcpAPI` methods (`runMcpServer`, `stopMcpServer`, `stopAllMcpServers`, `sendMcpMessage`, and event listeners) via `contextBridge` in `src/preload.ts`.
+- **Fixed**: Registered backend IPC handlers for `mcp:*` commands in `src/ipcHandlers.ts` and process shutdown hooks in `src/main.ts`.
+- **Fixed**: Corrected batch script execution in `repatch.bat` using `call` to ensure automatic patch compilation and deployment.
+
 ### v2.2.0 — Antigravity v2.3.1 Compatibility
 - **Compatibility**: Updated to work with **Antigravity v2.3.1** (previously only supported up to v2.0.x)
 - **Fixed**: Solid/blank screen after patching — restored 3 missing contextBridge APIs that v2.3.1 frontend requires (`ide.isInstalled`, `electronUpdater.getState`, `electronNative.revealInFilePicker`)
@@ -739,6 +745,4 @@ Apache License 2.0. See [LICENSE](LICENSE) for details.
 
 ## Developer
 
-**Abdulvahap OGUT**
-
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/abdulvahap-ogut-343992398/)
+**Mohsen**
