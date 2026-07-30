@@ -51,6 +51,7 @@ exports.translateResponse = translateResponse;
 exports.translateStreamChunk = translateStreamChunk;
 exports.getProviderHeaders = getProviderHeaders;
 exports.supportsStreaming = supportsStreaming;
+exports.normalizeChatCompletionsUrl = normalizeChatCompletionsUrl;
 exports.getProviderUrl = getProviderUrl;
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
@@ -163,6 +164,21 @@ function supportsStreaming(provider) {
     return OPENAI_COMPAT.has(provider) || ANTHROPIC_COMPAT.has(provider) || provider === 'google';
 }
 // ─── URL Helpers ──────────────────────────────────────────────────────────
+/**
+ * Appends the OpenAI-compatible chat endpoint when the user supplied only a
+ * base URL. Shared with the Auto Switch verifier so a probe always hits the
+ * exact URL the proxy will use for real traffic.
+ */
+function normalizeChatCompletionsUrl(baseUrl) {
+    const lower = baseUrl.toLowerCase();
+    if (lower.includes('/chat/completions') || lower.includes('/completions'))
+        return baseUrl;
+    if (baseUrl.endsWith('/v1'))
+        return baseUrl + '/chat/completions';
+    if (!baseUrl.endsWith('/'))
+        return baseUrl + '/v1/chat/completions';
+    return baseUrl + 'v1/chat/completions';
+}
 function getProviderUrl(baseUrl, modelName, isStream, translator) {
     // Google AI Studio: dynamic streaming vs non-streaming URL
     if (translator && typeof translator['getGoogleApiUrl'] === 'function') {

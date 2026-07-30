@@ -157,6 +157,19 @@ export function supportsStreaming(provider: string): boolean {
 
 // ─── URL Helpers ──────────────────────────────────────────────────────────
 
+/**
+ * Appends the OpenAI-compatible chat endpoint when the user supplied only a
+ * base URL. Shared with the Auto Switch verifier so a probe always hits the
+ * exact URL the proxy will use for real traffic.
+ */
+export function normalizeChatCompletionsUrl(baseUrl: string): string {
+  const lower = baseUrl.toLowerCase();
+  if (lower.includes('/chat/completions') || lower.includes('/completions')) return baseUrl;
+  if (baseUrl.endsWith('/v1')) return baseUrl + '/chat/completions';
+  if (!baseUrl.endsWith('/')) return baseUrl + '/v1/chat/completions';
+  return baseUrl + 'v1/chat/completions';
+}
+
 export function getProviderUrl(
   baseUrl: string,
   modelName: string,

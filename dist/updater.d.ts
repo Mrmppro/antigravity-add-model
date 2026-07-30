@@ -5,6 +5,7 @@ export declare enum MenuUpdateStep {
     RestartToUpdate = "Restart to Update"
 }
 export declare const updateActions: Record<string, (() => void) | undefined>;
+export declare function setAutoUpdateChecking(enabled: boolean): void;
 interface UpdaterState {
     type: string;
     update?: {
@@ -13,6 +14,10 @@ interface UpdaterState {
 }
 /** Broadcast a state change to every open BrowserWindow. */
 export declare function broadcastState(state: UpdaterState): void;
+/**
+ * Returns the last update state broadcast to renderers.
+ */
+export declare function getLastState(): UpdaterState;
 /**
  * Initializes the auto-updater and registers IPC handlers.
  * Call once after the first window is created.
@@ -23,7 +28,12 @@ export declare function broadcastState(state: UpdaterState): void;
  * 3. Download updates automatically in the background.
  * 4. Broadcast state to the renderer so AppUpdateButton can display progress.
  */
-export declare function initAutoUpdater(isHeadless: boolean): void;
+export declare function initAutoUpdater(isHeadless: boolean, settingsService?: {
+    getSetting: (key: string) => Promise<boolean>;
+    onSettingChanged: (key: string, listener: (enabled: boolean) => void) => {
+        dispose(): void;
+    };
+}): void;
 export declare function checkForUpdates(isManual?: boolean): void;
 export declare function quitAndInstall(): void;
 export {};

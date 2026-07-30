@@ -7,6 +7,8 @@ var SettingKey;
 (function (SettingKey) {
     SettingKey["RUN_IN_BACKGROUND"] = "runInBackground";
     SettingKey["KEEP_COMPUTER_AWAKE"] = "keepComputerAwake";
+    SettingKey["AUTO_CHECK_FOR_UPDATES"] = "autoCheckForUpdates";
+    SettingKey["GRAVITY_AUTO_SWITCH_ENABLED"] = "gravityAutoSwitchEnabled";
 })(SettingKey || (exports.SettingKey = SettingKey = {}));
 // Default values
 exports.DEFAULTS = new Map([
@@ -15,6 +17,8 @@ exports.DEFAULTS = new Map([
     // it is on macOS and linux.
     [SettingKey.RUN_IN_BACKGROUND, process.platform !== 'win32'],
     [SettingKey.KEEP_COMPUTER_AWAKE, false],
+    [SettingKey.AUTO_CHECK_FOR_UPDATES, true],
+    [SettingKey.GRAVITY_AUTO_SWITCH_ENABLED, false],
 ]);
 /**
  * A thin wrapper around StorageManager to listen for changes
@@ -42,6 +46,14 @@ class SettingsService {
     async getSetting(key) {
         const items = await this.storageManager.getItems();
         return items[key] === 'true';
+    }
+    onSettingChanged(key, listener) {
+        return this.storageManager.onDidChange((changes) => {
+            const val = changes[key];
+            if (val !== undefined) {
+                listener(val === null ? exports.DEFAULTS.get(key) : val === 'true');
+            }
+        });
     }
 }
 exports.SettingsService = SettingsService;

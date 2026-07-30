@@ -26,6 +26,8 @@ function mapGeminiToGoogle(geminiBody, modelName) {
     if (modelName && !body.model) {
         body.model = modelName;
     }
+    delete body.modelId;
+    delete body.model_id;
     return body;
 }
 // ─── Response Translation (Passthrough) ───────────────────────────────────

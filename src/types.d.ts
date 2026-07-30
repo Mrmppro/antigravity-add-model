@@ -83,6 +83,7 @@ declare module 'electron' {
 
   export class Notification {
     constructor(options: { title: string; body: string; silent?: boolean; icon?: string });
+    static isSupported(): boolean;
     show(): void;
     on(event: string, listener: () => void): void;
   }

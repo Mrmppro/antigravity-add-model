@@ -5,6 +5,7 @@
  */
 
 import { contextBridge, ipcRenderer, webFrame } from 'electron';
+import type { AutoSwitchPolicy, AutoSwitchRoute } from './autoSwitch/types';
 
 // ─── Type Declarations for APIs exposed to renderer ──────────────────────────
 
@@ -50,6 +51,25 @@ interface StorageAPI {
   testModelConnection: (model: TestModelParams) => Promise<ConnectionTestResult>;
 }
 
+interface VerifyModelResult {
+  ok: boolean;
+  route?: AutoSwitchRoute;
+  messages: string[];
+}
+
+interface ReverifyResult {
+  checked: number;
+  failed: string[];
+}
+
+interface AutoSwitchAPI {
+  getPolicy: () => Promise<AutoSwitchPolicy>;
+  savePolicy: (policy: AutoSwitchPolicy) => Promise<AutoSwitchPolicy>;
+  setEnabled: (enabled: boolean) => Promise<AutoSwitchPolicy>;
+  /** Probes one of the user's models and records what it can actually do. */
+  verifyModel: (modelName: string) => Promise<VerifyModelResult>;
+  reverifyStale: () => Promise<ReverifyResult>;
+}
 interface LogsAPI {
   getElectronLogs: () => Promise<string>;
 }
@@ -174,6 +194,13 @@ const storageAPI: StorageAPI = {
   testModelConnection: (model) => ipcRenderer.invoke('storage:test-model-connection', model),
 };
 
+const autoSwitchAPI: AutoSwitchAPI = {
+  getPolicy: () => ipcRenderer.invoke('autoSwitch:get-policy'),
+  savePolicy: (policy) => ipcRenderer.invoke('autoSwitch:save-policy', policy),
+  setEnabled: (enabled) => ipcRenderer.invoke('autoSwitch:set-enabled', enabled),
+  verifyModel: (modelName) => ipcRenderer.invoke('autoSwitch:verify-model', modelName),
+  reverifyStale: () => ipcRenderer.invoke('autoSwitch:reverify-stale'),
+};
 const logsAPI: LogsAPI = {
   getElectronLogs: () => ipcRenderer.invoke('logs:electron'),
 };
@@ -233,6 +260,7 @@ contextBridge.exposeInMainWorld('electronUpdater', updaterAPI);
 contextBridge.exposeInMainWorld('dialog', dialogAPI);
 contextBridge.exposeInMainWorld('nativeNotifications', notificationAPI);
 contextBridge.exposeInMainWorld('nativeStorage', storageAPI);
+contextBridge.exposeInMainWorld('autoSwitch', autoSwitchAPI);
 contextBridge.exposeInMainWorld('logs', logsAPI);
 contextBridge.exposeInMainWorld('extensions', extensionsAPI);
 contextBridge.exposeInMainWorld('deepLink', deepLinkAPI);
@@ -248,6 +276,7 @@ declare global {
     dialog: DialogAPI;
     nativeNotifications: NotificationAPI;
     nativeStorage: StorageAPI;
+    autoSwitch: AutoSwitchAPI;
     logs: LogsAPI;
     extensions: ExtensionsAPI;
     deepLink: DeepLinkAPI;
@@ -271,36 +300,39 @@ window.addEventListener('DOMContentLoaded', () => {
     contentBlock: Element | null;
   }
 
-  function findMcpSectionContainer(): McpLayout | null {
+  function findCustomizationSectionContainer(): McpLayout | null {
     const refreshBtn = findRefreshButton();
-    if (!refreshBtn) return null;
+    if (refreshBtn?.parentElement?.parentElement?.parentNode) {
+      const headerRow = refreshBtn.parentElement.parentElement;
+      return {
+        mainContainer: headerRow.parentNode,
+        headerRow,
+        contentBlock: headerRow.nextElementSibling,
+      };
+    }
 
-    const btnGroup = refreshBtn.parentNode;
-    if (!btnGroup) return null;
+    const customizationMarker = Array.from(document.querySelectorAll<HTMLElement>('[aria-label], [data-testid], h1, h2, h3, [role="heading"]'))
+      .find((element) => /^(customization|custom models|mcp|skills)$/i.test((element.textContent || '').trim()));
+    if (!customizationMarker) return null;
 
-    const headerRow = btnGroup.parentNode as Element;
-    if (!headerRow) return null;
-
-    const mainContainer = headerRow.parentNode;
-    if (!mainContainer) return null;
-
-    const contentBlock = headerRow.nextElementSibling;
-
+    const headerRow = customizationMarker.closest('section, [role="region"], div') || customizationMarker.parentElement;
+    const mainContainer = headerRow?.parentNode;
+    if (!headerRow || !mainContainer) return null;
     return {
       mainContainer,
       headerRow,
-      contentBlock,
+      contentBlock: headerRow.nextElementSibling,
     };
   }
 
   // ─── Provider Icons & Status Helpers ──────────────────────────────
   const PROVIDER_ICONS: Record<string, string> = {
-    openai: \`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 17l10 5 10-5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 12l10 5 10-5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>\`,
-    anthropic: \`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="8" width="4" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="10" y="5" width="4" height="14" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="17" y="2" width="4" height="20" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>\`,
-    google: \`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.5"/><path d="M12 4a8 8 0 0 1 5.66 13.66L12 12V4z" fill="currentColor" fill-opacity="0.2"/></svg>\`,
-    ollama: \`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="3" stroke="currentColor" stroke-width="1.5"/><circle cx="9" cy="10" r="1.5" fill="currentColor"/><circle cx="15" cy="10" r="1.5" fill="currentColor"/><path d="M8 15c1 1.5 3 2 4 2s3-.5 4-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>\`,
-    openrouter: \`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="12" r="3" fill="currentColor" fill-opacity="0.3"/></svg>\`,
-    custom: \`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>\`,
+    openai: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 17l10 5 10-5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 12l10 5 10-5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`,
+    anthropic: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="3" y="8" width="4" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="10" y="5" width="4" height="14" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="17" y="2" width="4" height="20" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>`,
+    google: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.5"/><path d="M12 4a8 8 0 0 1 5.66 13.66L12 12V4z" fill="currentColor" fill-opacity="0.2"/></svg>`,
+    ollama: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="3" stroke="currentColor" stroke-width="1.5"/><circle cx="9" cy="10" r="1.5" fill="currentColor"/><circle cx="15" cy="10" r="1.5" fill="currentColor"/><path d="M8 15c1 1.5 3 2 4 2s3-.5 4-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+    openrouter: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="12" r="3" fill="currentColor" fill-opacity="0.3"/></svg>`,
+    custom: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
   };
 
   const PROVIDER_COLORS: Record<string, string> = {
@@ -340,10 +372,10 @@ window.addEventListener('DOMContentLoaded', () => {
         placeholder.style.borderRadius = '8px';
         placeholder.style.textAlign = 'center';
 
-        placeholder.innerHTML = \`
+        placeholder.innerHTML = `
                     <div style="font-size: 15px; font-weight: 600; color: #f4f4f5; margin-bottom: 4px;">No Custom Models</div>
                     <div style="font-size: 13px; color: #a1a1aa;">You currently don't have any custom models installed. Add a custom model above.</div>
-                \`;
+                `;
         contentArea.appendChild(placeholder);
       } else {
         models.forEach((model) => {
@@ -454,7 +486,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
           // Test Connection button
           const testBtn = document.createElement('button');
-          testBtn.innerHTML = \`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>\`;
+          testBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
           testBtn.style.background = 'transparent';
           testBtn.style.border = 'none';
           testBtn.style.color = '#a1a1aa';
@@ -483,7 +515,7 @@ window.addEventListener('DOMContentLoaded', () => {
             testBtn.style.color = '#fbbf24';
             testBtn.style.cursor = 'wait';
             testBtn.disabled = true;
-            testBtn.innerHTML = \`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>\`;
+            testBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>`;
 
             try {
               const result = await storageAPI.testModelConnection({
@@ -498,21 +530,21 @@ window.addEventListener('DOMContentLoaded', () => {
                 statusDot.title = result.message || 'Connected';
                 testBtn.title = 'Connected ✓';
                 testBtn.style.color = '#22c55e';
-                testBtn.innerHTML = \`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>\`;
+                testBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
               } else {
                 statusDot.style.backgroundColor = '#ef4444'; // red
                 const errMsg = result.error || 'Connection failed';
                 statusDot.title = errMsg;
                 testBtn.title = errMsg;
                 testBtn.style.color = '#ef4444';
-                testBtn.innerHTML = \`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>\`;
+                testBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
               }
             } catch (err) {
               statusDot.style.backgroundColor = '#ef4444';
               statusDot.title = 'Connection test failed';
               testBtn.title = 'Connection test failed';
               testBtn.style.color = '#ef4444';
-              testBtn.innerHTML = \`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>\`;
+              testBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
             }
 
             testBtn.style.cursor = 'pointer';
@@ -529,14 +561,14 @@ window.addEventListener('DOMContentLoaded', () => {
 
           // Delete button
           const deleteBtn = document.createElement('button');
-          deleteBtn.innerHTML = \`
+          deleteBtn.innerHTML = `
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <polyline points="3 6 5 6 21 6"></polyline>
                             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                             <line x1="10" y1="11" x2="10" y2="17"></line>
                             <line x1="14" y1="11" x2="14" y2="17"></line>
                         </svg>
-                    \`;
+                    `;
           deleteBtn.style.background = 'transparent';
           deleteBtn.style.border = 'none';
           deleteBtn.style.color = '#a1a1aa';
@@ -559,7 +591,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
           deleteBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
-            if (confirm(\`Are you sure you want to delete the model "\${model.displayName || model.name}"?\`)) {
+            if (confirm(`Are you sure you want to delete the model "${model.displayName || model.name}"?`)) {
               await storageAPI.deleteCustomModel(model.name as string);
               await renderCustomModelsList();
 
@@ -581,8 +613,332 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  async function injectCustomModelsSection(): Promise<void> {
-    const layout = findMcpSectionContainer();
+  async function renderAutoSwitchCard(section: HTMLElement): Promise<void> {
+    if (document.getElementById('agy-auto-switch-card')) return;
+
+    const existingThemeStyles = document.getElementById('agy-auto-switch-theme');
+    if (!existingThemeStyles) {
+      const themeStyles = document.createElement('style');
+      themeStyles.id = 'agy-auto-switch-theme';
+      themeStyles.textContent = `
+        #agy-auto-switch-card {
+          --agy-bg: var(--vscode-editorWidget-background, var(--vscode-editor-background, Canvas));
+          --agy-fg: var(--vscode-foreground, CanvasText);
+          --agy-muted: var(--vscode-descriptionForeground, var(--vscode-foreground, CanvasText));
+          --agy-border: var(--vscode-widget-border, var(--vscode-panel-border, GrayText));
+          --agy-accent: var(--vscode-focusBorder, Highlight);
+          display: flex; flex-direction: column; gap: 14px; padding: 18px;
+          color: var(--agy-fg); background: var(--agy-bg); border: 1px solid var(--agy-border);
+          border-left: 4px solid var(--agy-accent); border-radius: 10px; box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+          color-scheme: light dark;
+        }
+        #agy-auto-switch-card *, #agy-auto-switch-card option { color: inherit; }
+        #agy-auto-switch-card .agy-auto-description, #agy-auto-switch-card .agy-auto-label,
+        #agy-auto-switch-card .agy-auto-status { color: var(--agy-muted) !important; }
+        #agy-auto-switch-card .agy-auto-control {
+          min-height: 34px; padding: 7px 9px; background: var(--vscode-input-background, Field);
+          color: var(--vscode-input-foreground, FieldText) !important; border: 1px solid var(--vscode-input-border, var(--agy-border));
+          border-radius: 6px;
+        }
+        #agy-auto-switch-card .agy-auto-control:focus-visible {
+          outline: 2px solid var(--agy-accent); outline-offset: 2px;
+        }
+        #agy-auto-switch-card .agy-auto-button { cursor: pointer; color: var(--vscode-button-secondaryForeground, var(--agy-fg)) !important; background: var(--vscode-button-secondaryBackground, ButtonFace); }
+        #agy-auto-switch-card .agy-auto-button:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground, ButtonFace)); }
+        #agy-auto-switch-card .agy-auto-primary { color: var(--vscode-button-foreground, ButtonText) !important; background: var(--vscode-button-background, Highlight); border-color: var(--vscode-button-background, Highlight); }
+        #agy-auto-switch-card .agy-auto-primary:hover { background: var(--vscode-button-hoverBackground, Highlight); }
+        #agy-auto-switch-card .agy-auto-status-pill { color: var(--vscode-badge-foreground, var(--agy-fg)) !important; background: var(--vscode-badge-background, var(--vscode-editorWidget-background, Canvas)); border: 1px solid var(--agy-border); border-radius: 999px; padding: 4px 8px; }
+        #agy-auto-switch-card .agy-auto-credit { color: var(--vscode-textLink-foreground, var(--agy-accent)) !important; text-decoration: none; }
+        #agy-auto-switch-card .agy-auto-credit:hover { color: var(--vscode-textLink-activeForeground, var(--agy-accent)) !important; text-decoration: underline; }
+        #agy-auto-switch-card .agy-auto-credit:focus-visible { outline: 2px solid var(--agy-accent); outline-offset: 2px; }
+        #agy-auto-switch-card input[type="checkbox"] { accent-color: var(--agy-accent); width: 16px; height: 16px; }
+        #agy-auto-switch-card .agy-auto-tier-select { min-width: 148px; }
+        #agy-auto-switch-card .agy-auto-priority { display:flex; align-items:center; gap:5px; font-size:11px; white-space:nowrap; }
+        #agy-auto-switch-card .agy-auto-order-button { min-height:28px; min-width:30px; padding:3px 7px; }
+        @media (forced-colors: active) { #agy-auto-switch-card { border: 2px solid CanvasText; box-shadow: none; } }
+      `;
+      document.head.appendChild(themeStyles);
+    }
+
+    const card = document.createElement('section');
+    card.id = 'agy-auto-switch-card';
+    card.setAttribute('aria-label', 'Gravity Auto Switch settings');
+    card.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px;">
+        <div>
+          <div style="font-size:15px; font-weight:700;">Gravity Auto Switch</div>
+          <div class="agy-auto-description" style="margin-top:4px; font-size:12px; line-height:1.5;">Auto Switch picks the cheapest of <strong>your own</strong> API models that can finish each request. Google models are always used exactly as you select them and are never changed.</div>
+          <a id="agy-auto-mrmp-pro-link" class="agy-auto-credit" href="https://mrmp.pro" target="_blank" rel="noopener noreferrer" aria-label="Visit MR MP PRO" style="display:inline-block; margin-top:7px; font-size:11px; font-weight:700; letter-spacing:.04em;">MR MP PRO ↗</a>
+        </div>
+        <span id="agy-auto-enabled-label" class="agy-auto-status-pill" aria-live="polite">Checking status…</span>
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:end;">
+        <label class="agy-auto-label" style="display:flex; flex-direction:column; gap:5px; font-size:12px; min-width:260px;">How should Auto Switch spend your money?
+          <select id="agy-auto-mode" aria-label="Gravity Auto Switch spending mode" class="agy-auto-control">
+            <option value="off">Off — always use the model I picked</option>
+            <option value="budget">Budget friendly — cheapest model that can do the job</option>
+            <option value="balanced">Balanced — mid-priced by default, strong only when needed</option>
+            <option value="max-performance">Max performance — strongest for real work, cheap for trivial steps</option>
+          </select>
+        </label>
+        <button id="agy-auto-enable" type="button" class="agy-auto-control agy-auto-button agy-auto-primary">Turn on Auto Switch</button>
+        <button id="agy-auto-turn-off" type="button" class="agy-auto-control agy-auto-button">Turn off Auto Switch</button>
+      </div>
+      <label class="agy-auto-label" style="display:flex; align-items:center; gap:8px; font-size:12px;">
+        <input id="agy-auto-prefer-local" type="checkbox" aria-label="Prefer my local model when it can handle the request" />
+        Prefer my local model when it can handle the request (costs nothing)
+      </label>
+      <label class="agy-auto-label" style="display:flex; align-items:center; gap:8px; font-size:12px;">
+        <input id="agy-auto-reverify" type="checkbox" aria-label="Re-check my models every 30 days" />
+        Re-check my models every 30 days and tell me if one stops working
+      </label>
+       <div>
+         <div class="agy-auto-label" style="font-size:12px; font-weight:600; margin-bottom:4px;">Your models</div>
+         <div class="agy-auto-description" style="font-size:11px; line-height:1.45; margin-bottom:7px;">Choose what each verified model is for. Spending mode chooses the tier; <strong>Primary</strong> is tried first and later models are fallbacks.</div>
+         <div id="agy-auto-model-rows" style="display:flex; flex-direction:column; gap:8px;"></div>
+       </div>
+      <div id="agy-auto-status" role="status" class="agy-auto-status" style="font-size:12px; font-weight:500;">Loading routing status…</div>
+    `;
+    section.prepend(card);
+
+    const enabledLabel = card.querySelector('#agy-auto-enabled-label') as HTMLElement;
+    const enableButton = card.querySelector('#agy-auto-enable') as HTMLButtonElement;
+    const turnOffButton = card.querySelector('#agy-auto-turn-off') as HTMLButtonElement;
+    const modeSelect = card.querySelector('#agy-auto-mode') as HTMLSelectElement;
+    const preferLocalInput = card.querySelector('#agy-auto-prefer-local') as HTMLInputElement;
+    const reverifyInput = card.querySelector('#agy-auto-reverify') as HTMLInputElement;
+    const modelRows = card.querySelector('#agy-auto-model-rows') as HTMLElement;
+    const status = card.querySelector('#agy-auto-status') as HTMLElement;
+
+    const models = await storageAPI.getCustomModels();
+
+    /** Google models cannot be Auto Switch targets, so they are not offered here. */
+    const routableModels = models.filter((model) => (model.provider || '').toLowerCase() !== 'google');
+
+    const TIER_LABELS: Record<string, string> = {
+      cheap: 'Cheap',
+      mid: 'Mid-priced',
+      strong: 'Strong',
+    };
+
+    const describeRoute = (route: AutoSwitchRoute | undefined): string => {
+      if (!route || route.verified.verifiedAt === 0) {
+        return route?.verified.lastError
+          ? `Not usable yet — ${route.verified.lastError}`
+          : 'Not checked yet — press Verify before Auto Switch can use it.';
+      }
+      const parts = [`${TIER_LABELS[route.tier] || route.tier} tier`];
+      parts.push(route.verified.tools ? 'tools confirmed' : 'no tool support');
+      if (route.isLocal) parts.push('runs locally');
+      if (route.verified.contextLimit) parts.push(`${route.verified.contextLimit.toLocaleString()} token limit`);
+      return `Verified — ${parts.join(', ')}.`;
+    };
+
+    /**
+     * Saves a change and repaints. Every write goes through the main process
+     * validator, so an unverified model can never end up as a live route.
+     */
+    const update = async (changes: Partial<AutoSwitchPolicy>): Promise<void> => {
+      try {
+        const current = await autoSwitchAPI.getPolicy();
+        const saved = await autoSwitchAPI.savePolicy({ ...current, ...changes });
+        paint(saved);
+      } catch (error) {
+        status.textContent = `Could not save Gravity Auto settings: ${error instanceof Error ? error.message : 'unknown error'}`;
+      }
+    };
+
+    const paint = (policy: AutoSwitchPolicy): void => {
+      const usable = policy.routes.filter((route) => route.enabled && route.verified.reachable);
+      enabledLabel.textContent = policy.enabled ? 'Status: Active' : 'Status: Off';
+      enableButton.disabled = policy.enabled || usable.length === 0 || policy.mode === 'off';
+      turnOffButton.disabled = !policy.enabled;
+      modeSelect.value = policy.mode;
+      preferLocalInput.checked = policy.preferLocal;
+      reverifyInput.checked = policy.reverifyDays > 0;
+
+      modelRows.replaceChildren();
+      if (routableModels.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'agy-auto-status';
+        empty.style.fontSize = '11px';
+        empty.textContent = 'Add a model with Add Model above, then press Verify to let Auto Switch use it.';
+        modelRows.appendChild(empty);
+      }
+
+      const normalizeTierPriorities = (routes: AutoSwitchRoute[]): void => {
+        for (const tier of ['cheap', 'mid', 'strong'] as const) {
+          const ordered = routes
+            .filter((candidate) => candidate.tier === tier)
+            .sort((left, right) => left.priority - right.priority || left.displayName.localeCompare(right.displayName));
+          ordered.forEach((candidate, index) => {
+            candidate.priority = index + 1;
+          });
+        }
+      };
+
+      for (const model of routableModels) {
+        const route = policy.routes.find((candidate) => candidate.id === model.name);
+        const row = document.createElement('div');
+        row.style.cssText =
+          'display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:9px 10px; border:1px solid var(--agy-border); border-radius:8px;';
+
+        const useLabel = document.createElement('label');
+        useLabel.style.cssText = 'display:flex; align-items:center; gap:5px; font-size:11px; white-space:nowrap;';
+        const useToggle = document.createElement('input');
+        useToggle.type = 'checkbox';
+        useToggle.id = `agy-auto-use-${model.name.replace(/[^a-z0-9]+/gi, '-')}`;
+        useToggle.setAttribute('aria-label', `Include ${model.displayName || model.name} in Auto Switch`);
+        useToggle.disabled = !route?.verified.reachable;
+        useToggle.checked = route?.enabled === true;
+        useLabel.append(useToggle, document.createTextNode('Include in Auto'));
+
+        const nameAndDetail = document.createElement('div');
+        nameAndDetail.style.cssText = 'flex:1 1 190px; min-width:160px;';
+        const name = document.createElement('div');
+        name.style.cssText = 'font-size:12px; font-weight:600;';
+        name.textContent = model.displayName || model.name;
+        const detail = document.createElement('div');
+        detail.className = 'agy-auto-status';
+        detail.style.cssText = 'margin-top:2px; font-size:11px; line-height:1.4;';
+        detail.textContent = describeRoute(route);
+        nameAndDetail.append(name, detail);
+
+        const tierLabel = document.createElement('label');
+        tierLabel.className = 'agy-auto-label';
+        tierLabel.style.cssText = 'display:flex; align-items:center; gap:5px; font-size:11px; white-space:nowrap;';
+        tierLabel.append(document.createTextNode('Use for:'));
+        const tierSelect = document.createElement('select');
+        tierSelect.id = `agy-auto-tier-${model.name.replace(/[^a-z0-9]+/gi, '-')}`;
+        tierSelect.className = 'agy-auto-control agy-auto-tier-select';
+        tierSelect.setAttribute('aria-label', `Choose the work tier for ${model.displayName || model.name}`);
+        tierSelect.disabled = !route?.verified.reachable;
+        tierSelect.innerHTML = '<option value="cheap">Cheap tasks</option><option value="mid">Mid-priced work</option><option value="strong">Strong work</option>';
+        tierSelect.value = route?.tier || 'mid';
+        tierLabel.append(tierSelect);
+
+        const peers = route
+          ? policy.routes.filter((candidate) => candidate.tier === route.tier).sort((left, right) => left.priority - right.priority)
+          : [];
+        const position = route ? Math.max(peers.findIndex((candidate) => candidate.id === route.id) + 1, 1) : 0;
+        const priorityBox = document.createElement('div');
+        priorityBox.className = 'agy-auto-priority';
+        priorityBox.textContent = route ? (position === 1 ? `Primary for ${TIER_LABELS[route.tier]}` : `Fallback ${position - 1}`) : 'Verify to assign';
+        const moveUp = document.createElement('button');
+        moveUp.type = 'button';
+        moveUp.id = `agy-auto-up-${model.name.replace(/[^a-z0-9]+/gi, '-')}`;
+        moveUp.className = 'agy-auto-control agy-auto-button agy-auto-order-button';
+        moveUp.textContent = '↑';
+        moveUp.setAttribute('aria-label', `Make ${model.displayName || model.name} a higher priority in its tier`);
+        moveUp.disabled = !route?.verified.reachable || position <= 1;
+        const moveDown = document.createElement('button');
+        moveDown.type = 'button';
+        moveDown.id = `agy-auto-down-${model.name.replace(/[^a-z0-9]+/gi, '-')}`;
+        moveDown.className = 'agy-auto-control agy-auto-button agy-auto-order-button';
+        moveDown.textContent = '↓';
+        moveDown.setAttribute('aria-label', `Make ${model.displayName || model.name} a lower priority in its tier`);
+        moveDown.disabled = !route?.verified.reachable || position === 0 || position >= peers.length;
+        priorityBox.append(moveUp, moveDown);
+
+        const verifyButton = document.createElement('button');
+        verifyButton.type = 'button';
+        verifyButton.className = 'agy-auto-control agy-auto-button';
+        verifyButton.textContent = route?.verified.reachable ? 'Re-verify' : 'Verify';
+        verifyButton.setAttribute('aria-label', `Verify ${model.displayName || model.name}`);
+        verifyButton.addEventListener('click', () => {
+          void (async () => {
+            verifyButton.disabled = true;
+            verifyButton.textContent = 'Verifying…';
+            detail.textContent = 'Sending two very small test requests to this model…';
+            try {
+              const result = await autoSwitchAPI.verifyModel(model.name);
+              if (result.ok) {
+                detail.textContent = [describeRoute(result.route), ...result.messages].join(' ');
+                paint(await autoSwitchAPI.getPolicy());
+                return;
+              }
+              detail.textContent = result.messages.join(' ') || 'Verification failed.';
+            } catch (error) {
+              detail.textContent = `Verification failed: ${error instanceof Error ? error.message : 'unknown error'}`;
+            }
+            verifyButton.disabled = false;
+            verifyButton.textContent = route?.verified.reachable ? 'Re-verify' : 'Verify';
+          })();
+        });
+
+        useToggle.addEventListener('change', () => {
+          void (async () => {
+            const current = await autoSwitchAPI.getPolicy();
+            const target = current.routes.find((candidate) => candidate.id === model.name);
+            if (!target) return;
+            target.enabled = useToggle.checked;
+            const stillUsable = current.routes.some((candidate) => candidate.enabled && candidate.verified.reachable);
+            await update(stillUsable ? { routes: current.routes } : { routes: current.routes, mode: 'off', enabled: false, chatMode: 'manual' });
+          })();
+        });
+
+        tierSelect.addEventListener('change', () => {
+          void (async () => {
+            const current = await autoSwitchAPI.getPolicy();
+            const target = current.routes.find((candidate) => candidate.id === model.name);
+            if (!target) return;
+            target.tier = tierSelect.value as AutoSwitchRoute['tier'];
+            target.priority = current.routes.filter((candidate) => candidate.tier === target.tier && candidate.id !== target.id).length + 1;
+            normalizeTierPriorities(current.routes);
+            await update({ routes: current.routes });
+          })();
+        });
+
+        const move = (direction: -1 | 1): void => {
+          void (async () => {
+            const current = await autoSwitchAPI.getPolicy();
+            const target = current.routes.find((candidate) => candidate.id === model.name);
+            if (!target) return;
+            const siblings = current.routes.filter((candidate) => candidate.tier === target.tier).sort((left, right) => left.priority - right.priority);
+            const currentIndex = siblings.findIndex((candidate) => candidate.id === target.id);
+            const swap = siblings[currentIndex + direction];
+            if (!swap) return;
+            [target.priority, swap.priority] = [swap.priority, target.priority];
+            normalizeTierPriorities(current.routes);
+            await update({ routes: current.routes });
+          })();
+        };
+        moveUp.addEventListener('click', () => move(-1));
+        moveDown.addEventListener('click', () => move(1));
+
+        row.append(useLabel, nameAndDetail, tierLabel, priorityBox, verifyButton);
+        modelRows.appendChild(row);
+      }
+
+      if (policy.enabled && policy.mode !== 'off') {
+        status.textContent = `Active — ${modeSelect.selectedOptions[0]?.text || policy.mode} using ${usable.length} verified model${usable.length === 1 ? '' : 's'}. Choose Auto on the chat control to route a conversation.`;
+      } else if (usable.length === 0) {
+        status.textContent = 'Off — verify at least one of your models, choose a spending mode, then turn Auto Switch on.';
+      } else {
+        status.textContent = `Off — ${usable.length} verified model${usable.length === 1 ? '' : 's'} ready. Choose a spending mode, then turn Auto Switch on.`;
+      }
+      void injectChatAutoSwitchControl();
+    };
+
+    modeSelect.addEventListener('change', () => {
+      const mode = modeSelect.value as AutoSwitchPolicy['mode'];
+      // Selecting Off should visibly stop routing rather than leaving a mode
+      // enabled that no longer matches what the dropdown shows.
+      void update(mode === 'off' ? { mode, enabled: false, chatMode: 'manual' } : { mode });
+    });
+    preferLocalInput.addEventListener('change', () => void update({ preferLocal: preferLocalInput.checked }));
+    reverifyInput.addEventListener('change', () => void update({ reverifyDays: reverifyInput.checked ? 30 : 0 }));
+    enableButton.addEventListener('click', () => void update({ enabled: true }));
+    turnOffButton.addEventListener('click', () => void update({ enabled: false, chatMode: 'manual' }));
+
+    try {
+      paint(await autoSwitchAPI.getPolicy());
+    } catch (error) {
+      status.textContent = `Could not read Gravity Auto settings: ${error instanceof Error ? error.message : 'unknown error'}`;
+    }
+  }
+  async function injectCustomizationSection(): Promise<void> {
+    const layout = findCustomizationSectionContainer();
     if (!layout) return;
 
     const { mainContainer, headerRow, contentBlock } = layout;
@@ -647,6 +1003,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
     section.appendChild(newHeaderRow);
     section.appendChild(contentArea);
+    await renderAutoSwitchCard(section);
 
     if (contentBlock && contentBlock.nextSibling) {
       mainContainer.insertBefore(section, contentBlock.nextSibling);
@@ -695,10 +1052,10 @@ window.addEventListener('DOMContentLoaded', () => {
     modal.style.transform = 'scale(0.9) translateY(20px)';
     modal.style.transition = 'transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)';
 
-    modal.innerHTML = \`
+    modal.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
                 <div style="display: flex; align-items: center; gap: 10px;">
-                    <div id="agy-modal-provider-icon" style="width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; background-color: #10a37f18; color: #10a37f;">\${PROVIDER_ICONS.openai}</div>
+                    <div id="agy-modal-provider-icon" style="width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; background-color: #10a37f18; color: #10a37f;">${PROVIDER_ICONS.openai}</div>
                     <h3 style="margin: 0; font-size: 20px; font-weight: 600; color: #f4f4f5;">Add Custom AI Model</h3>
                 </div>
                 <button id="agy-modal-close" style="background: transparent; border: none; color: #a1a1aa; cursor: pointer; font-size: 20px; line-height: 1; padding: 4px; display: flex; align-items: center; justify-content: center; transition: color 0.15s ease;">&times;</button>
@@ -767,7 +1124,7 @@ window.addEventListener('DOMContentLoaded', () => {
                     <button id="agy-btn-save" style="background-color: #e4e4e7; border: none; border-radius: 8px; color: #18181b; padding: 10px 22px; font-size: 14px; font-weight: 500; cursor: pointer; transition: background-color 0.15s ease, opacity 0.15s ease;">Save Model</button>
                 </div>
             </div>
-        \`;
+        `;
 
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
@@ -866,7 +1223,7 @@ window.addEventListener('DOMContentLoaded', () => {
       validateModelId();
       if (providerSelect.value === 'google') {
         const modelId = modelInput.value.trim() || 'model-name';
-        urlInput.value = \`https://generativelanguage.googleapis.com/v1beta/models/\${modelId}:generateContent\`;
+        urlInput.value = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
         validateUrl();
       }
     });
@@ -876,7 +1233,7 @@ window.addEventListener('DOMContentLoaded', () => {
       const modelId = modelInput.value.trim() || 'model-name';
 
       if (val === 'google') {
-        urlInput.value = \`https://generativelanguage.googleapis.com/v1beta/models/\${modelId}:generateContent\`;
+        urlInput.value = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`;
       } else {
         urlInput.value = prefilledUrls[val] || '';
       }
@@ -1033,13 +1390,13 @@ window.addEventListener('DOMContentLoaded', () => {
           cerebras: 'Cerebras', kimi: 'Kimi', fireworks: 'Fireworks',
           lmstudio: 'LM Studio', llamacpp: 'llama.cpp', nvidia: 'NVIDIA',
         };
-        displayName = \`\${modelId} (\${providerNames[provider]})\`;
+        displayName = `${modelId} (${providerNames[provider]})`;
       }
 
       const newModel: CustomModelEntry = {
         name: 'models/' + modelId,
         displayName: displayName,
-        description: \`\${displayName} custom model redirected through local proxy\`,
+        description: `${displayName} custom model redirected through local proxy`,
         provider: provider,
         apiKey: apiKey || 'none',
         apiUrl: apiUrl,
@@ -1075,30 +1432,97 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  /**
+   * Chat-first control: it changes only the persisted routing mode. Native model
+   * choices retain their normal behavior and no virtual model is inserted anywhere.
+   */
+  async function injectChatAutoSwitchControl(): Promise<void> {
+    const existingControl = document.getElementById('agy-chat-auto-switch');
+    let policy: AutoSwitchPolicy;
+    try {
+      policy = await autoSwitchAPI.getPolicy();
+    } catch {
+      existingControl?.remove();
+      return;
+    }
+
+    // A globally disabled switch should have no chat affordance. The policy and
+    // route bindings remain saved so a later re-enable restores the control.
+    if (!policy.enabled) {
+      existingControl?.remove();
+      return;
+    }
+
+    if (existingControl) return;
+    const composer = document.querySelector('textarea, [contenteditable="true"]');
+    if (!composer) return;
+
+    const control = document.createElement('div');
+    control.id = 'agy-chat-auto-switch';
+    control.setAttribute('role', 'group');
+    control.setAttribute('aria-label', 'Gravity Auto Switch chat mode');
+    control.style.cssText = [
+      'position:fixed', 'right:18px', 'bottom:18px', 'z-index:2147483000',
+      'display:flex', 'align-items:center', 'gap:5px', 'padding:6px',
+      'border:1px solid var(--vscode-widget-border, rgba(127,127,127,.45))',
+      'border-radius:999px', 'background:var(--vscode-editorWidget-background, rgba(30,30,30,.96))',
+      'box-shadow:0 8px 24px rgba(0,0,0,.22)', 'font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+    ].join(';');
+    control.innerHTML = `
+      <span style="padding:0 5px 0 7px; color:var(--vscode-descriptionForeground,inherit); font-weight:600; white-space:nowrap;">Gravity</span>
+      <button id="agy-chat-mode-manual" type="button" aria-pressed="true" title="Use the model selected in Antigravity" style="border:0;border-radius:999px;padding:5px 9px;cursor:pointer;">Manual</button>
+      <button id="agy-chat-mode-auto" type="button" aria-pressed="false" title="Route this chat according to your Gravity Auto Switch settings" style="border:0;border-radius:999px;padding:5px 9px;cursor:pointer;">Auto</button>
+    `;
+    document.body.appendChild(control);
+
+    const manual = control.querySelector('#agy-chat-mode-manual') as HTMLButtonElement;
+    const auto = control.querySelector('#agy-chat-mode-auto') as HTMLButtonElement;
+    const paint = (autoSelected: boolean) => {
+      manual.setAttribute('aria-pressed', String(!autoSelected));
+      auto.setAttribute('aria-pressed', String(autoSelected));
+      manual.style.background = autoSelected ? 'transparent' : 'var(--vscode-button-secondaryBackground, #3a3d41)';
+      manual.style.color = 'var(--vscode-button-secondaryForeground, inherit)';
+      auto.style.background = autoSelected ? 'var(--vscode-button-background, #0e639c)' : 'transparent';
+      auto.style.color = autoSelected ? 'var(--vscode-button-foreground, white)' : 'var(--vscode-descriptionForeground, inherit)';
+    };
+    try {
+      const policy = await autoSwitchAPI.getPolicy();
+      paint(policy.chatMode === 'auto');
+    } catch {
+      paint(false);
+    }
+    manual.addEventListener('click', async () => {
+      const policy = await autoSwitchAPI.getPolicy();
+      await autoSwitchAPI.savePolicy({ ...policy, chatMode: 'manual' });
+      paint(false);
+    });
+    auto.addEventListener('click', async () => {
+      const policy = await autoSwitchAPI.getPolicy();
+      if (!policy.enabled || policy.mode === 'off' || !policy.routes.some((route) => route.enabled && route.verified.reachable)) {
+        auto.title = 'Verify at least one of your models in Customization and turn Auto Switch on before using Auto.';
+        return;
+      }
+      await autoSwitchAPI.savePolicy({ ...policy, chatMode: 'auto' });
+      paint(true);
+    });
+  }
+
   // Efficient DOM tracking via MutationObserver — instead of setInterval
   let injectionObserver: MutationObserver | null = null;
   let injectionDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   function setupInjectionObserver(): void {
-    // Try immediately first
-    void injectCustomModelsSection();
+    // Retry immediately and as the single-page Settings UI finishes rendering.
+    void injectCustomizationSection();
+    void injectChatAutoSwitchControl();
 
-    // If already added, no need for observer
-    if (document.getElementById('agy-custom-models-section')) return;
+    if (injectionObserver) return;
 
-    // Set up observer: watch all changes under document.body
     injectionObserver = new MutationObserver(() => {
-      // Debounce: coalesce consecutive mutations into a single attempt
       if (injectionDebounceTimer) clearTimeout(injectionDebounceTimer);
-      injectionDebounceTimer = setTimeout(async () => {
-        await injectCustomModelsSection();
-        // If successfully injected, stop observing
-        if (document.getElementById('agy-custom-models-section')) {
-          if (injectionObserver) {
-            injectionObserver.disconnect();
-            injectionObserver = null;
-          }
-        }
+      injectionDebounceTimer = setTimeout(() => {
+        void injectCustomizationSection();
+        void injectChatAutoSwitchControl();
       }, 200);
     });
 
@@ -1124,131 +1548,9 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   }, 1500);
 
-  // --- Network Interceptor for Model Injection --------------------------
-
-  const customModelsCache: { models: any[]; ts: number } = { models: [], ts: 0 };
-
-  async function getCustomModelsForInjection(): Promise<any[]> {
-    if (Date.now() - customModelsCache.ts < 30000) return customModelsCache.models;
-    try {
-      customModelsCache.models = await storageAPI.getCustomModels();
-      customModelsCache.ts = Date.now();
-    } catch { /* ignore */ }
-    return customModelsCache.models;
-  }
-
-  // Intercept XHR to inject custom models into GetAvailableModels responses
-  const origXHROpen = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function (
-    method: string,
-    url: string | URL,
-    async?: boolean,
-    username?: string | null,
-    password?: string | null,
-  ) {
-    (this as any)._agy_url = typeof url === 'string' ? url : url.toString();
-    (this as any)._agy_method = method;
-    return origXHROpen.call(this, method, url, async as boolean, username, password);
-  };
-
-  const origXHRSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.send = function (body?: Document | XMLHttpRequestBodyInit | null) {
-    const xhr = this;
-    const url: string = (xhr as any)._agy_url || '';
-
-    if (url.includes('GetAvailableModels') || url.includes('fetchAvailableModels')) {
-      const origOnReady = xhr.onreadystatechange;
-      xhr.onreadystatechange = async function (ev: Event) {
-        if (xhr.readyState === 4 && xhr.status === 200) {
-          const customModels = await getCustomModelsForInjection();
-          if (customModels && customModels.length > 0) {
-            try {
-              const responseText = xhr.responseText;
-              if (responseText && responseText.length > 10) {
-                const parsed = JSON.parse(responseText) as Record<string, unknown>;
-                const modelsObj = (parsed.models || parsed.availableModels || parsed.available_models || {}) as Record<string, unknown>;
-                for (const m of customModels) {
-                  const slug = 'custom-' + ((m.externalModelName || m.name || '') as string)
-                    .replace(/^models\\//, '')
-                    .replace(/[^a-zA-Z0-9]+/g, '-')
-                    .replace(/^-+|-+$/g, '')
-                    .toLowerCase();
-                  (modelsObj as Record<string, unknown>)[slug] = {
-                    displayName: m.displayName || m.name,
-                    recommended: true,
-                    maxTokens: 1048576,
-                    maxOutputTokens: 4096,
-                    tokenizerType: 'LLAMA_WITH_SPECIAL',
-                    model: 'MODEL_PLACEHOLDER_M' + (400 + (Math.abs(hashCodeStr(m.displayName || m.name || '') as number) % 200)),
-                    apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
-                    modelProvider: 'MODEL_PROVIDER_GOOGLE',
-                  };
-                }
-                // Override response
-                Object.defineProperty(xhr, 'responseText', { value: JSON.stringify(parsed), writable: true });
-                Object.defineProperty(xhr, 'response', { value: JSON.stringify(parsed), writable: true });
-              }
-            } catch { /* ignore parse errors */ }
-          }
-        }
-        if (origOnReady) origOnReady.call(xhr, ev);
-      };
-    }
-    return origXHRSend.call(xhr, body);
-  };
-
-  // Intercept fetch responses for model endpoints
-  const origFetch = window.fetch;
-  window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    const url = typeof input === 'string' ? input : (input as Request).url;
-    const response = await origFetch.call(window, input, init);
-
-    if ((url.includes('GetAvailableModels') || url.includes('fetchAvailableModels')) && response.ok) {
-      const customModels = await getCustomModelsForInjection();
-      if (customModels && customModels.length > 0) {
-        try {
-          const cloned = response.clone();
-          const text = await cloned.text();
-          if (text && text.length > 10) {
-            const parsed = JSON.parse(text) as Record<string, unknown>;
-            const modelsObj = (parsed.models || parsed.availableModels || parsed.available_models || {}) as Record<string, unknown>;
-            for (const m of customModels) {
-              const slug = 'custom-' + ((m.externalModelName || m.name || '') as string)
-                .replace(/^models\\//, '')
-                .replace(/[^a-zA-Z0-9]+/g, '-')
-                .replace(/^-+|-+$/g, '')
-                .toLowerCase();
-              (modelsObj as Record<string, unknown>)[slug] = {
-                displayName: m.displayName || m.name,
-                recommended: true,
-                maxTokens: 1048576,
-                maxOutputTokens: 4096,
-                tokenizerType: 'LLAMA_WITH_SPECIAL',
-                model: 'MODEL_PLACEHOLDER_M' + (400 + (Math.abs(hashCodeStr(m.displayName || m.name || '') as number) % 200)),
-                apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
-                modelProvider: 'MODEL_PROVIDER_GOOGLE',
-              };
-            }
-            return new Response(JSON.stringify(parsed), {
-              status: response.status,
-              statusText: response.statusText,
-              headers: response.headers,
-            });
-          }
-        } catch { /* ignore parse errors */ }
-      }
-    }
-    return response;
-  };
-
-  function hashCodeStr(s: string): number {
-    let h = 5381;
-    for (let i = 0; i < s.length; i++) {
-      h = (h << 5) + h + s.charCodeAt(i);
-      h = h & h;
-    }
-    return Math.abs(h);
-  }
+  // The native model catalog is intentionally left untouched. The proxy performs
+  // custom-model and Auto Switch routing only after a valid native generation
+  // request has been created.
 
   // Start the observer
   setupInjectionObserver();

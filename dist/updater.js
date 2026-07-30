@@ -34,7 +34,9 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.updateActions = exports.MenuUpdateStep = void 0;
+exports.setAutoUpdateChecking = setAutoUpdateChecking;
 exports.broadcastState = broadcastState;
+exports.getLastState = getLastState;
 exports.initAutoUpdater = initAutoUpdater;
 exports.checkForUpdates = checkForUpdates;
 exports.quitAndInstall = quitAndInstall;
@@ -42,6 +44,7 @@ const electron_updater_1 = require("electron-updater");
 const electron_1 = require("electron");
 const path = __importStar(require("path"));
 const child_process_1 = require("child_process");
+const settingsService_1 = require("./services/settingsService");
 var MenuUpdateStep;
 (function (MenuUpdateStep) {
     MenuUpdateStep["CheckForUpdates"] = "Check for Updates";
@@ -61,11 +64,48 @@ let isManualCheck = false;
 const INITIAL_CHECK_DELAY_MS = 10000; // 10 seconds
 // How often to re-check for updates after the initial check (ms)
 const CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+let updaterInitialized = false;
+let periodicCheckInterval;
+function startAutoUpdateChecks() {
+    if (periodicCheckInterval) {
+        return;
+    }
+    console.log('[AutoUpdater] Starting auto update checks');
+    checkForUpdates();
+    periodicCheckInterval = setInterval(checkForUpdates, CHECK_INTERVAL_MS);
+}
+function stopAutoUpdateChecks() {
+    console.log('[AutoUpdater] Stopping auto update checks');
+    if (periodicCheckInterval) {
+        clearInterval(periodicCheckInterval);
+        periodicCheckInterval = undefined;
+    }
+}
+function setAutoUpdateChecking(enabled) {
+    if (!updaterInitialized) {
+        return;
+    }
+    if (enabled) {
+        startAutoUpdateChecks();
+    }
+    else {
+        stopAutoUpdateChecks();
+    }
+}
+// The last update state broadcast to renderers.
+let lastState = { type: 'idle' };
 /** Broadcast a state change to every open BrowserWindow. */
 function broadcastState(state) {
+    lastState = state;
     for (const win of electron_1.BrowserWindow.getAllWindows()) {
         win.webContents.send('updater:state-changed', state);
     }
+}
+/**
+ * Returns the last update state broadcast to renderers.
+ */
+function getLastState() {
+    return lastState;
 }
 /**
  * Updates the state of the menu item based on the current step of the updater.
@@ -90,7 +130,7 @@ function updateMenuState(step) {
  * 3. Download updates automatically in the background.
  * 4. Broadcast state to the renderer so AppUpdateButton can display progress.
  */
-function initAutoUpdater(isHeadless) {
+function initAutoUpdater(isHeadless, settingsService) {
     // In dev mode (npm start), electron-updater skips checks because the app
     // isn't packaged. Force it to use the dev config file instead.
     if (!electron_1.app.isPackaged) {
@@ -178,11 +218,24 @@ function initAutoUpdater(isHeadless) {
         updateMenuState(MenuUpdateStep.CheckForUpdates);
         isManualCheck = false;
     });
-    // Schedule periodic checks
-    setTimeout(() => {
-        checkForUpdates();
-        setInterval(checkForUpdates, CHECK_INTERVAL_MS);
-    }, INITIAL_CHECK_DELAY_MS);
+    // Schedule periodic checks if needed
+    updaterInitialized = true;
+    if (settingsService) {
+        setTimeout(async () => {
+            const autoCheckEnabled = await settingsService.getSetting(settingsService_1.SettingKey.AUTO_CHECK_FOR_UPDATES);
+            setAutoUpdateChecking(autoCheckEnabled);
+        }, INITIAL_CHECK_DELAY_MS);
+        // Cancel or restart periodic checks on setting change
+        settingsService.onSettingChanged(settingsService_1.SettingKey.AUTO_CHECK_FOR_UPDATES, (enabled) => {
+            setAutoUpdateChecking(enabled);
+        });
+    }
+    else {
+        setTimeout(() => {
+            checkForUpdates();
+            setInterval(checkForUpdates, CHECK_INTERVAL_MS);
+        }, INITIAL_CHECK_DELAY_MS);
+    }
 }
 function checkForUpdates(isManual = false) {
     isManualCheck = isManual;

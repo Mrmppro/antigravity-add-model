@@ -18,3 +18,9 @@ scratch/
 dist/__mocks__/
 dist/*.test.js
 dist/**/*.test.js
+
+# Local Antigravity configuration (never commit credentials or routing policy)
+custom_models.json
+gravity_auto_switch.json
+gravity_auto_switch.json.corrupt-*
+*.corrupt-*
