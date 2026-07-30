@@ -713,6 +713,26 @@ Set `DEBUG=antigravity:*` for verbose logging (debug level captures stream parse
 
 ## Changelog
 
+### Gravity Auto Switch v3 — configurable cost-aware routing
+
+- **New**: Optional **Auto** chat mode routes only your verified custom API models
+  through user-assigned **Cheap**, **Mid-priced**, and **Strong** tiers.
+- **Control**: You set each tier's **Primary** model and ordered fallbacks; the
+  selected order is respected rather than replaced by automatic price guesses.
+- **Savings modes**: **Budget friendly**, **Balanced**, and **Max performance**
+  choose from your configured tiers according to the complexity of the request.
+- **Safety**: Google-managed models are never rerouted. Tool use, attachments,
+  protected work, and unverified capabilities follow conservative eligibility
+  rules; manual selection is retained if no safe route is available.
+- **Reliability**: A route that fails before returning a response can fall back
+  to the next eligible model in the configured order. Re-verifying a model
+  refreshes its proof without overwriting its tier, priority, or enabled state.
+- **Verification**: The release was validated with `npm run build` and
+  `npx vitest run` (**159 tests passed**).
+
+See [Gravity Auto Switch](docs/gravity-auto-switch.md) for configuration,
+routing behavior, logging, and limitations.
+
 ### v2.4.2 — Antigravity v2.4.2 Compatibility & MCP Subsystem Support
 - **Compatibility**: Full support for **Antigravity v2.4.2** MCP (Model Context Protocol) subsystem.
 - **Fixed**: Solid/blank screen after patching on v2.4.2 — bridged `mcpAPI` methods (`runMcpServer`, `stopMcpServer`, `stopAllMcpServers`, `sendMcpMessage`, and event listeners) via `contextBridge` in `src/preload.ts`.
