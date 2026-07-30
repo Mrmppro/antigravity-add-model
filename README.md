@@ -809,4 +809,6 @@ attribution, and license notices when redistributing modified versions.
 **Abdulvahap OGUT** — Original project creator
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/abdulvahap-ogut-343992398/)
 
-**Mohsen and contributors** — Gravity Auto Switch and fork maintenance
+**Mohsen and contributors** — Gravity Auto Switch and fork maintenance  
+Website: [mrmp.pro](https://mrmp.pro/)  
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/mohsen-mahmodpour/)
