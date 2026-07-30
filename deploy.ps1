@@ -4,6 +4,7 @@
 
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  Antigravity Safe Deploy Script" -ForegroundColor Yellow
+Write-Host "  MRMPPRO | Customization, MCP, Skills & Gravity Auto Switch" -ForegroundColor Magenta
 Write-Host "============================================" -ForegroundColor Cyan
 
 # 1. Antigravity'yi kapat
@@ -80,6 +81,7 @@ Write-Host "   OK - Gecici dizin: $TempDir" -ForegroundColor Green
 
 # 5. Sadece dist klasorunu projeden kopyala ve gereksizleri sil
 Write-Host "[4/7] dist klasoru guncelleniyor ve gereksiz dosyalar temizleniyor..." -ForegroundColor Yellow
+Write-Host "   MRMPPRO: Customization, MCP, Skills & Gravity Auto Switch hazirlaniyor..." -ForegroundColor Magenta
 
 # Temizleme
 if (Test-Path (Join-Path $TempDir ".git")) { Remove-Item (Join-Path $TempDir ".git") -Recurse -Force }
@@ -90,7 +92,7 @@ $destDist = Join-Path $TempDir "dist"
 
 if (Test-Path $destDist) { Remove-Item $destDist -Recurse -Force }
 Copy-Item $srcDist $destDist -Recurse -Force
-Write-Host "   OK - dist kopyalandi." -ForegroundColor Green
+Write-Host "   OK - dist kopyalandi. MRMPPRO customization patch hazir." -ForegroundColor Green
 
 # repack.ps1 de kopyala (guncel versiyonu)
 $srcRepack = Join-Path $ProjectDir "repack.ps1"
@@ -160,6 +162,7 @@ if (Test-Path $ExePath) {
     Write-Host "============================================" -ForegroundColor Cyan
     Write-Host "  BASARILI! Antigravity yeniden basladi." -ForegroundColor Green
     Write-Host "  Degisiklikler:" -ForegroundColor Gray
+    Write-Host "    - MRMPPRO Customization: Models, MCP, Skills & Gravity Auto Switch" -ForegroundColor Magenta
     Write-Host "    - Model placeholder ID'leri (M400-M599) uyumlu hale getirildi" -ForegroundColor Gray
     Write-Host "    - deploy.ps1 PowerShell derleme hatasi giderildi" -ForegroundColor Gray
     Write-Host "============================================" -ForegroundColor Cyan

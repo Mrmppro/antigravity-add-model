@@ -10,6 +10,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { app } from 'electron';
 import log from 'electron-log';
+import { getAutoSwitchConfigPath, loadAutoSwitchPolicy } from './autoSwitch/config';
+import { hasProtectedText, resolveFallbackRoutes, resolveRoute } from './autoSwitch/router';
+import type { AutoSwitchRoute, RequestFeatures, RouteDecision } from './autoSwitch/types';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -100,6 +103,103 @@ function toSlug(model: CustomModel): string {
       .toLowerCase()
   );
 }
+
+function textFromRequest(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(textFromRequest).join(' ');
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => key === 'text' || key === 'systemInstruction' || key === 'contents' || key === 'parts')
+      .map(([, child]) => textFromRequest(child))
+      .join(' ');
+  }
+  return '';
+}
+
+/**
+ * Extracts the routing features from a request body.
+ *
+ * Kept separate from the decision so the runtime safety net can reuse the exact
+ * same features when it looks for an alternate model.
+ */
+function featuresFromRequest(body: GeminiRequestBody): RequestFeatures {
+  const text = textFromRequest(body);
+  const serialized = JSON.stringify(body);
+  return {
+    estimatedTokens: Math.ceil(text.length / 4),
+    turns: body.contents?.length || 0,
+    hasTools: Array.isArray(body.tools) && body.tools.length > 0,
+    hasImagesOrAttachments: /"(?:inlineData|fileData|image)"/i.test(serialized),
+    hasFunctionResponses: /"functionResponse"/i.test(serialized),
+    hasProtectedIndicators: hasProtectedText(text),
+  };
+}
+
+function resolveChatAutoSwitchDecision(body: GeminiRequestBody): RouteDecision | undefined {
+  const policy = loadAutoSwitchPolicy(getAutoSwitchConfigPath(app.getPath('home')));
+  if (!policy.enabled || policy.chatMode !== 'auto') return undefined;
+  return resolveRoute(true, policy, featuresFromRequest(body));
+}
+
+/**
+ * Alternates to try if the chosen model fails before its first token. Google is
+ * never included, so a failed Auto route always ends at the user's own
+ * selection rather than at a rewritten Google request.
+ */
+function resolveAutoSwitchFallbacks(body: GeminiRequestBody, excludeId: string): AutoSwitchRoute[] {
+  const policy = loadAutoSwitchPolicy(getAutoSwitchConfigPath(app.getPath('home')));
+  if (!policy.enabled || policy.chatMode !== 'auto') return [];
+  return resolveFallbackRoutes(policy, featuresFromRequest(body), new Set([excludeId]));
+}
+
+function logChatAutoDecision(nativeModel: string | undefined, decision: RouteDecision): void {
+  const source = nativeModel || 'unknown';
+  const base = `[Auto Switch] native=${source} class=${decision.taskClass} action=${decision.action} chain=${decision.chain.join('>') || 'none'} reasons=${decision.reasonCodes.join(',') || 'none'}`;
+  if (decision.action === 'route' && decision.target) {
+    log.info(`${base} tier=${decision.tier} priority=${decision.target.priority} target=${decision.target.displayName} (custom)`);
+  } else {
+    log.info(base);
+  }
+}
+
+function findCustomModelForRoute(target: AutoSwitchRoute, models: CustomModel[]): CustomModel | undefined {
+  return models.find(
+    (model) =>
+      model.name === target.id || toSlug(model) === target.id || generateModelPlaceholderId(model) === target.id,
+  );
+}
+
+/**
+ * Resolves an Auto Switch decision into a concrete custom model, together with
+ * the alternates the safety net may use.
+ *
+ * Returns undefined when nothing verified can serve the request, which leaves
+ * the caller's native request completely untouched.
+ */
+function resolveAutoSwitchModel(
+  body: GeminiRequestBody,
+  nativeModel: string | undefined,
+): { model: CustomModel; fallbacks: CustomModel[] } | undefined {
+  const decision = resolveChatAutoSwitchDecision(body);
+  if (!decision) return undefined;
+  logChatAutoDecision(nativeModel, decision);
+  if (decision.action !== 'route' || !decision.target) return undefined;
+
+  const customModels = loadCustomModels();
+  const model = findCustomModelForRoute(decision.target, customModels);
+  if (!model) {
+    // The route points at a model the user has since deleted or renamed.
+    log.warn(`[Auto Switch] Target "${decision.target.displayName}" is no longer available; using the selected model.`);
+    return undefined;
+  }
+
+  const fallbacks = resolveAutoSwitchFallbacks(body, decision.target.id)
+    .map((route) => findCustomModelForRoute(route, customModels))
+    .filter((candidate): candidate is CustomModel => candidate !== undefined);
+
+  return { model, fallbacks };
+}
+
 
 // ─── Model Loading ────────────────────────────────────────────────────────
 
@@ -204,9 +304,48 @@ function loadCustomModels(): CustomModel[] {
   }
 }
 
+function sanitizePayloadForGoogle(body: Buffer): Buffer {
+  if (!body || body.length === 0) return body;
+  try {
+    const text = body.toString('utf-8');
+    if (!text.trim().startsWith('{')) return body;
+    const json = JSON.parse(text) as Record<string, unknown>;
+
+    let modified = false;
+    const cleanObject = (obj: Record<string, unknown>) => {
+      if (!obj || typeof obj !== 'object') return;
+      if ('modelId' in obj) {
+        delete obj.modelId;
+        modified = true;
+      }
+      if ('model_id' in obj) {
+        delete obj.model_id;
+        modified = true;
+      }
+      for (const key of Object.keys(obj)) {
+        const val = obj[key];
+        if (val && typeof val === 'object') {
+          cleanObject(val as Record<string, unknown>);
+        }
+      }
+    };
+
+    cleanObject(json);
+
+    if (modified) {
+      return Buffer.from(JSON.stringify(json), 'utf-8');
+    }
+  } catch {
+    // Ignore non-JSON or parse errors
+  }
+  return body;
+}
+
 // ─── Google Proxy ─────────────────────────────────────────────────────────
 
 function proxyToGoogle(req: http.IncomingMessage, res: http.ServerResponse, reqBody: Buffer): void {
+  const finalBody = sanitizePayloadForGoogle(reqBody);
+
   const isCloudCodeUrl = req.url!.includes('v1internal') || req.url!.includes('daily-cloudcode');
   const targetUrl = isCloudCodeUrl
     ? 'https://daily-cloudcode-pa.googleapis.com'
@@ -219,6 +358,10 @@ function proxyToGoogle(req: http.IncomingMessage, res: http.ServerResponse, reqB
   headers['host'] = isCloudCodeUrl ? 'daily-cloudcode-pa.googleapis.com' : 'generativelanguage.googleapis.com';
   delete headers['connection'];
   delete headers['keep-alive'];
+
+  if (finalBody && finalBody.length > 0) {
+    headers['content-length'] = String(finalBody.length);
+  }
 
   const isGeneration = req.url!.includes('generateContent') || req.url!.includes('streamGenerateContent');
   const shouldBufferAndModify = isCloudCodeUrl && !isGeneration;
@@ -293,8 +436,8 @@ function proxyToGoogle(req: http.IncomingMessage, res: http.ServerResponse, reqB
     res.end(JSON.stringify({ error: { message: 'Proxy forwarding failed: ' + err.message } }));
   });
 
-  if (reqBody) {
-    proxyReq.write(reqBody);
+  if (finalBody) {
+    proxyReq.write(finalBody);
   }
   proxyReq.end();
 }
@@ -375,10 +518,28 @@ function handleCustomModelRequest(
   geminiBody: GeminiRequestBody,
   isStream: boolean,
   retryCount = 0,
+  /**
+   * Auto Switch alternates, ordered cheapest-first. Only consulted while no
+   * bytes have reached the client, so a fallback can never corrupt a reply that
+   * is already streaming.
+   */
+  fallbacks: readonly CustomModel[] = [],
 ): void {
   // P3-18: Configurable max retries per model (default 3, min 0, max 5)
   const MAX_RETRIES = Math.min(Math.max(model.maxRetries ?? 3, 0), 5);
   const REQUEST_TIMEOUT_MS = model.timeout || 120_000;
+
+  /**
+   * Hands the request to the next Auto Switch alternate. Returns false when no
+   * safe handover is possible, in which case the caller reports the error.
+   */
+  const handOverToFallback = (reason: string): boolean => {
+    if (res.headersSent || fallbacks.length === 0) return false;
+    const [next, ...rest] = fallbacks;
+    log.warn(`[Auto Switch] ${model.name} failed before responding (${reason}); trying ${next.name}.`);
+    handleCustomModelRequest(res, next, geminiBody, isStream, 0, rest);
+    return true;
+  };
 
   const provider = model.provider === 'custom' || model.provider === 'openrouter' ? 'openai' : model.provider;
 
@@ -396,16 +557,7 @@ function handleCustomModelRequest(
     const providerTranslator = registry.getTranslator(provider);
     finalUrlStr = registry.getProviderUrl(finalUrlStr, model.externalModelName, isStream, providerTranslator);
   } else if (provider === 'openai' || model.provider === 'custom' || model.provider === 'openrouter') {
-    const urlLower = finalUrlStr.toLowerCase();
-    if (!urlLower.includes('/chat/completions') && !urlLower.includes('/completions')) {
-      if (finalUrlStr.endsWith('/v1')) {
-        finalUrlStr += '/chat/completions';
-      } else if (!finalUrlStr.endsWith('/')) {
-        finalUrlStr += '/v1/chat/completions';
-      } else {
-        finalUrlStr += 'v1/chat/completions';
-      }
-    }
+    finalUrlStr = registry.normalizeChatCompletionsUrl(finalUrlStr);
   }
   const url = new URL(finalUrlStr);
   const client = url.protocol === 'https:' ? https : http;
@@ -431,6 +583,7 @@ function handleCustomModelRequest(
   const request = client.request(url, options, (apiRes) => {
     apiRes.on('error', (err) => {
       log.error(`[Proxy] Upstream stream error for ${model.name}:`, err.message);
+      if (handOverToFallback(`upstream stream error: ${err.message}`)) return;
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: { message: 'Upstream connection error: ' + err.message } }));
@@ -448,9 +601,13 @@ function handleCustomModelRequest(
           log.error(`[Proxy] Stream API error (${apiRes.statusCode}) for ${model.name}: ${errorBody.substring(0, 300)}`);
           if (retryCount < MAX_RETRIES) {
             log.warn(`[Proxy] Stream error, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
-            setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1), 1000 * (retryCount + 1));
+            setTimeout(
+              () => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1, fallbacks),
+              1000 * (retryCount + 1),
+            );
             return;
           }
+          if (handOverToFallback(`HTTP ${apiRes.statusCode}`)) return;
           res.writeHead(apiRes.statusCode!, { 'Content-Type': 'application/json' });
           res.end(errorBody);
         });
@@ -544,7 +701,7 @@ function handleCustomModelRequest(
           log.warn(
             `[Proxy] Server error ${apiRes.statusCode} for ${model.name}, retrying in ${delay}ms (${retryCount + 1}/${MAX_RETRIES})...`,
           );
-          setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1), delay);
+          setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1, fallbacks), delay);
           return;
         }
 
@@ -555,13 +712,14 @@ function handleCustomModelRequest(
           log.warn(
             `[Proxy] Rate limited (429) for ${model.name}, retrying in ${delay}ms (${retryCount + 1}/${MAX_RETRIES})...`,
           );
-          setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1), delay);
+          setTimeout(() => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1, fallbacks), delay);
           return;
         }
 
         if (apiRes.statusCode! >= 400) {
           // P0-3: Only log status code and model name, NOT response body content
           log.error(`[Proxy] API error (${apiRes.statusCode}) for ${model.name}`);
+          if (handOverToFallback(`HTTP ${apiRes.statusCode}`)) return;
           res.writeHead(apiRes.statusCode!, { 'Content-Type': 'application/json' });
           res.end(body);
           return;
@@ -598,12 +756,13 @@ function handleCustomModelRequest(
           if (retryCount < MAX_RETRIES) {
             log.warn(`[Proxy] Parse error for ${model.name}, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
             setTimeout(
-              () => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1),
+              () => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1, fallbacks),
               1000 * (retryCount + 1),
             );
             return;
           }
 
+          if (handOverToFallback('the response could not be translated')) return;
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: 'Failed to translate model response' } }));
         }
@@ -618,11 +777,13 @@ function handleCustomModelRequest(
     if (retryCount < MAX_RETRIES) {
       log.warn(`[Proxy] Timeout for ${model.name}, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
       setTimeout(
-        () => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1),
+        () => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1, fallbacks),
         1000 * (retryCount + 1),
       );
       return;
     }
+
+    if (handOverToFallback(`timeout after ${REQUEST_TIMEOUT_MS / 1000}s`)) return;
 
     if (!res.headersSent) {
       res.writeHead(504, { 'Content-Type': 'application/json' });
@@ -636,11 +797,13 @@ function handleCustomModelRequest(
     if (retryCount < MAX_RETRIES) {
       log.warn(`[Proxy] Network error for ${model.name}, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
       setTimeout(
-        () => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1),
+        () => handleCustomModelRequest(res, model, geminiBody, isStream, retryCount + 1, fallbacks),
         1000 * (retryCount + 1),
       );
       return;
     }
+
+    if (handOverToFallback(`network error: ${err.message}`)) return;
 
     if (isStream) {
       if (!res.headersSent) {
@@ -1366,6 +1529,16 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
         log.info(
           `[Proxy] Cloud Code generation request model: ${modelName}, modelId: ${modelId}, url: ${req.url}, bodyKeys: ${Object.keys(reqJson).join(',')}`,
         );
+        const actualGeminiBody = (reqJson.request || reqJson) as GeminiRequestBody;
+        const autoSelection = resolveAutoSwitchModel(actualGeminiBody, modelName);
+        if (autoSelection) {
+          const isStream = req.url!.includes('streamGenerateContent') || req.url!.includes('alt=sse');
+          void resolveFileData(actualGeminiBody, req.headers as Record<string, string | string[] | undefined>).then(() =>
+            handleCustomModelRequest(res, autoSelection.model, actualGeminiBody, isStream, 0, autoSelection.fallbacks),
+          );
+          return;
+        }
+
         if (modelName) {
           const customModels = loadCustomModels();
           const matchedCustomModel = customModels.find((m) => {
@@ -1385,6 +1558,14 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
             return;
           }
         }
+
+        // Clean up non-standard internal fields (modelId/model_id) before proxying native Google Cloud Code requests
+        if ('modelId' in reqJson || 'model_id' in reqJson) {
+          delete reqJson.modelId;
+          delete reqJson.model_id;
+          proxyToGoogle(req, res, Buffer.from(JSON.stringify(reqJson), 'utf8'));
+          return;
+        }
       } catch (err) {
         log.error('[Proxy] Failed to parse Cloud Code stream body:', err);
       }
@@ -1399,6 +1580,27 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
 
     if (req.method === 'POST' && (isGenerate || isStandardStream)) {
       const matchedModelName = isGenerate ? generateMatch![1] : streamMatch![1];
+      try {
+        const geminiBody = JSON.parse(bodyStr) as GeminiRequestBody;
+        const autoSelection = resolveAutoSwitchModel(geminiBody, matchedModelName);
+        if (autoSelection) {
+          void resolveFileData(geminiBody, req.headers as Record<string, string | string[] | undefined>).then(() =>
+            handleCustomModelRequest(
+              res,
+              autoSelection.model,
+              geminiBody,
+              isStandardStream,
+              0,
+              autoSelection.fallbacks,
+            ),
+          );
+          return;
+        }
+      } catch (error) {
+        // The native request remains the safe fallback for any unknown payload.
+        log.warn('[Proxy] Chat Auto evaluation failed; preserving native request:', error);
+      }
+
       const customModels = loadCustomModels();
       const matchedCustomModel = customModels.find((m) => {
         const enumName = generateModelPlaceholderId(m);

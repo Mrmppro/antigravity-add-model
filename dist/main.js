@@ -144,6 +144,9 @@ electron_1.app
     }
     // Register IPC handlers
     (0, ipcHandlers_1.registerIpcHandlers)(storageManager);
+    // Re-check Auto Switch models that have gone stale. Detached so a slow or
+    // unreachable provider can never hold up launch.
+    (0, ipcHandlers_1.scheduleAutoSwitchReverification)();
     electron_1.ipcMain.handle('deep-link:get-stored', () => {
         const link = pendingDeepLink;
         pendingDeepLink = null; // Clear after read

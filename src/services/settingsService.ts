@@ -5,6 +5,7 @@ export enum SettingKey {
   RUN_IN_BACKGROUND = 'runInBackground',
   KEEP_COMPUTER_AWAKE = 'keepComputerAwake',
   AUTO_CHECK_FOR_UPDATES = 'autoCheckForUpdates',
+  GRAVITY_AUTO_SWITCH_ENABLED = 'gravityAutoSwitchEnabled',
 }
 
 // Default values
@@ -15,6 +16,7 @@ export const DEFAULTS = new Map<SettingKey, boolean>([
   [SettingKey.RUN_IN_BACKGROUND, process.platform !== 'win32'],
   [SettingKey.KEEP_COMPUTER_AWAKE, false],
   [SettingKey.AUTO_CHECK_FOR_UPDATES, true],
+  [SettingKey.GRAVITY_AUTO_SWITCH_ENABLED, false],
 ]);
 
 interface StorageManager {

@@ -64,6 +64,8 @@ export function mapGeminiToGoogle(geminiBody: GeminiRequestBody, modelName: stri
   if (modelName && !body.model) {
     body.model = modelName;
   }
+  delete body.modelId;
+  delete (body as Record<string, unknown>).model_id;
   return body;
 }
 

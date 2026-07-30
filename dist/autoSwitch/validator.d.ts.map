@@ -1,0 +1,1 @@
+{"version":3,"file":"validator.d.ts","sourceRoot":"","sources":["../../src/autoSwitch/validator.ts"],"names":[],"mappings":"AAAA,OAAO,EAIL,gBAAgB,EAMjB,MAAM,SAAS,CAAC;AAKjB,MAAM,WAAW,0BAA0B;IACzC,KAAK,EAAE,OAAO,CAAC;IACf,MAAM,EAAE,MAAM,EAAE,CAAC;IACjB,MAAM,EAAE,gBAAgB,CAAC;CAC1B;AAkED,wBAAgB,wBAAwB,CAAC,KAAK,EAAE,OAAO,GAAG,0BAA0B,CA0InF"}
