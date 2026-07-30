@@ -496,7 +496,7 @@ $fs.Close()
 
 ## Configuration
 
-Models are stored in your home directory at `~/.gemini/antigravity/custom_models.json`. You can easily add them via the **"Add Model"** modal in Settings, or edit the JSON file directly. 
+Models are stored in your home directory at `~/.gemini/antigravity/custom_models.json`. You can easily add them via the **"Add Model"** modal in Settings, or edit the JSON file directly.
 
 Here is an example of a **fully loaded** `custom_models.json` file configuring **multiple models across all providers at the same time**:
 
@@ -800,4 +800,9 @@ attribution, and license notices when redistributing modified versions.
 
 ## Developer
 
-**Mohsen**
+**Abdulvahap OGUT** — Original project creator
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/abdulvahap-ogut-343992398/)
+
+**Mohsen and contributors** — Gravity Auto Switch and fork maintenance
+Website: [mrmp.pro](https://mrmp.pro/)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/mohsen-mahmodpour/)
