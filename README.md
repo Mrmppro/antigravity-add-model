@@ -1,6 +1,53 @@
 # Antigravity Custom Model Enabler
 
+> **Unofficial compatibility patch.** This independent project is not affiliated
+> with, endorsed by, or supported by Google. “Google” and “Antigravity” are used
+> only to describe compatible products; their respective trademark owners retain
+> all rights.
+
 This repository contains a patch for **Google Antigravity** that enables external AI models (OpenAI, Anthropic, Together API, Ollama, Google AI Studio, and any OpenAI-compatible provider) alongside the built-in Gemini models. It injects a local HTTP proxy into the Electron app, reverse-engineers the Cloud Code internal API (`v1internal`), translates request/response formats between providers, and provides an inline "Add Model" UI in the Settings page.
+
+## Gravity Auto Switch — use your API budget deliberately
+
+**Gravity Auto Switch** is an opt-in router for the custom models you add and
+verify. It can send routine requests to a lower-cost model while reserving your
+stronger models for complex or protected work. This can reduce spending on your
+own API accounts, but savings depend on your providers, model prices, prompt
+mix, and the tiers you choose.
+
+You stay in control:
+
+- Assign every verified custom model to **Cheap**, **Mid-priced**, or
+  **Strong**, then order it as **Primary** or a **Fallback** in that tier.
+- Choose a spending mode: **Budget friendly**, **Balanced**, or **Max
+  performance**. Auto Switch selects from your configured tiers; it does not
+  invent providers or change their prices.
+- Keep a chat in **Manual** mode whenever you want the model you selected to be
+  used exactly as-is. **Google models are never modified or rerouted.**
+- Protected work—such as tool use, function results, attachments, credentials,
+  deployment-related requests, or destructive-operation language—uses the
+  Strong → Mid-priced chain. A route must have its required capabilities
+  verified before it is eligible.
+- When a primary route fails before it produces a response, the configured
+  fallbacks are tried in order. Re-verifying a model refreshes its capabilities
+  without overwriting your tier, priority, or enabled choice.
+
+### Quick start
+
+1. Add your API models in **Settings → Models → Custom Models**.
+2. Press **Verify** for each model you want Auto Switch to use.
+3. In **Gravity Auto Switch**, choose each model’s **Use for** tier and set
+   **Primary/Fallback** order with the arrow controls.
+4. Select a spending mode, turn Auto Switch on, then choose **Auto** in the
+   chat mode control.
+5. Check the local log for `tier=` and `priority=` to confirm the selected
+   route.
+
+> [!NOTE]
+> Image/attachment support is deliberately conservative: a model must first
+> prove that capability during verification. Until then, an attachment request
+> is left on the manually selected model instead of being sent to an unproven
+> route. See the detailed [Gravity Auto Switch guide](docs/gravity-auto-switch.md).
 
 ## How It Works
 
@@ -45,6 +92,7 @@ Antigravity IDE
 | [preload.ts](src/preload.ts) | UI injection: Custom Models dashboard in Settings → Models, inline Add Model modal with animations, connectivity test button |
 | [main.ts](src/main.ts) | App lifecycle: intercepts and blocks `SetCloudCodeURL` requests to prevent the frontend from overriding the proxy endpoint |
 | [ipcHandlers.ts](src/ipcHandlers.ts) | Backend IPC: `storage:get-custom-models`, `storage:save-custom-model`, `storage:delete-custom-model`, `storage:test-model-connection` |
+| [autoSwitch/](src/autoSwitch) | Opt-in Gravity Auto policy validation and rule-based routing for a dedicated `Gravity Auto` model-picker entry; see [Gravity Auto Switch](docs/gravity-auto-switch.md) |
 | [languageServer.ts](src/languageServer.ts) | Modified language server manager, starts proxy on app launch |
 
 #### Deployment Scripts
@@ -448,7 +496,7 @@ $fs.Close()
 
 ## Configuration
 
-Models are stored in your home directory at `~/.gemini/antigravity/custom_models.json`. You can easily add them via the **"Add Model"** modal in Settings, or edit the JSON file directly. 
+Models are stored in your home directory at `~/.gemini/antigravity/custom_models.json`. You can easily add them via the **"Add Model"** modal in Settings, or edit the JSON file directly.
 
 Here is an example of a **fully loaded** `custom_models.json` file configuring **multiple models across all providers at the same time**:
 
@@ -660,10 +708,16 @@ $env:HEADLESS="1"; .\Antigravity.exe
 ```
 
 Set `DEBUG=antigravity:*` for verbose logging (debug level captures stream parse fallbacks and wire-level details).
-
 ---
 
 ## Changelog
+
+### Gravity Auto Switch v3 — Configurable cost-aware routing
+- **New**: Optional Auto mode routes only verified custom API models through user-assigned **Cheap**, **Mid-priced**, and **Strong** tiers.
+- **Control**: Each tier supports a user-selected **Primary** route and ordered fallbacks; Google models remain manually selected and are never rerouted.
+- **Safety**: Protected requests, tools, attachments, and unverified capabilities use conservative eligibility rules and preserve manual selection when no safe route exists.
+- **Reliability**: Policy migration keeps existing routes and assigns deterministic priorities; pre-response failures try the next configured fallback.
+- **Verified**: `npm run build` and the full test suite pass (159 tests).
 
 ### v2.4.2 — Antigravity v2.4.2 Compatibility & MCP Subsystem Support
 - **Compatibility**: Full support for **Antigravity v2.4.2** MCP (Model Context Protocol) subsystem.
@@ -737,12 +791,22 @@ Pull requests welcome. Please ensure:
 
 ---
 
-## License
+## License and attribution
 
-Apache License 2.0. See [LICENSE](LICENSE) for details.
+This is a modified derivative of the **Antigravity Custom Model Enabler** project
+created by Vahap Ogut (see this repository’s Git history). Gravity Auto Switch
+and its documentation are additional modifications by the maintainers of this
+repository.
+
+This repository is distributed under the Apache License 2.0. See
+[LICENSE](LICENSE) and [NOTICE](NOTICE). Retain applicable copyright,
+attribution, and license notices when redistributing modified versions.
 
 ---
 
 ## Developer
 
-**Mohsen**
+**Abdulvahap OGUT** — Original project creator
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/abdulvahap-ogut-343992398/)
+
+**Mohsen and contributors** — Gravity Auto Switch and fork maintenance

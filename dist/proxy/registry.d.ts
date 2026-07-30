@@ -36,5 +36,11 @@ export declare function translateResponse(provider: string, providerRes: unknown
 export declare function translateStreamChunk(provider: string, chunk: unknown, modelName: string): unknown;
 export declare function getProviderHeaders(provider: string, apiKey: string): ProviderHeaders;
 export declare function supportsStreaming(provider: string): boolean;
+/**
+ * Appends the OpenAI-compatible chat endpoint when the user supplied only a
+ * base URL. Shared with the Auto Switch verifier so a probe always hits the
+ * exact URL the proxy will use for real traffic.
+ */
+export declare function normalizeChatCompletionsUrl(baseUrl: string): string;
 export declare function getProviderUrl(baseUrl: string, modelName: string, isStream: boolean, translator: TranslatorModule | null): string;
 //# sourceMappingURL=registry.d.ts.map

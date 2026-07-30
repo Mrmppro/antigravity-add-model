@@ -8,6 +8,7 @@ var SettingKey;
     SettingKey["RUN_IN_BACKGROUND"] = "runInBackground";
     SettingKey["KEEP_COMPUTER_AWAKE"] = "keepComputerAwake";
     SettingKey["AUTO_CHECK_FOR_UPDATES"] = "autoCheckForUpdates";
+    SettingKey["GRAVITY_AUTO_SWITCH_ENABLED"] = "gravityAutoSwitchEnabled";
 })(SettingKey || (exports.SettingKey = SettingKey = {}));
 // Default values
 exports.DEFAULTS = new Map([
@@ -17,6 +18,7 @@ exports.DEFAULTS = new Map([
     [SettingKey.RUN_IN_BACKGROUND, process.platform !== 'win32'],
     [SettingKey.KEEP_COMPUTER_AWAKE, false],
     [SettingKey.AUTO_CHECK_FOR_UPDATES, true],
+    [SettingKey.GRAVITY_AUTO_SWITCH_ENABLED, false],
 ]);
 /**
  * A thin wrapper around StorageManager to listen for changes

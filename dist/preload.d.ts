@@ -3,6 +3,7 @@
  * Exposes a minimal, secure API via contextBridge so the renderer can
  * communicate with the main-process auto-updater without nodeIntegration.
  */
+import type { AutoSwitchPolicy, AutoSwitchRoute } from './autoSwitch/types';
 interface UpdaterState {
     type: string;
     update?: {
@@ -45,6 +46,23 @@ interface StorageAPI {
         error?: string;
     }>;
     testModelConnection: (model: TestModelParams) => Promise<ConnectionTestResult>;
+}
+interface VerifyModelResult {
+    ok: boolean;
+    route?: AutoSwitchRoute;
+    messages: string[];
+}
+interface ReverifyResult {
+    checked: number;
+    failed: string[];
+}
+interface AutoSwitchAPI {
+    getPolicy: () => Promise<AutoSwitchPolicy>;
+    savePolicy: (policy: AutoSwitchPolicy) => Promise<AutoSwitchPolicy>;
+    setEnabled: (enabled: boolean) => Promise<AutoSwitchPolicy>;
+    /** Probes one of the user's models and records what it can actually do. */
+    verifyModel: (modelName: string) => Promise<VerifyModelResult>;
+    reverifyStale: () => Promise<ReverifyResult>;
 }
 interface LogsAPI {
     getElectronLogs: () => Promise<string>;
@@ -111,6 +129,7 @@ declare global {
         dialog: DialogAPI;
         nativeNotifications: NotificationAPI;
         nativeStorage: StorageAPI;
+        autoSwitch: AutoSwitchAPI;
         logs: LogsAPI;
         extensions: ExtensionsAPI;
         deepLink: DeepLinkAPI;

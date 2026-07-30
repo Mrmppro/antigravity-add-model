@@ -197,3 +197,64 @@ describe('parseRetryAfter', () => {
     expect(parseRetryAfter({ 'retry-after': '' })).toBe(0);
   });
 });
+
+describe('Payload Cleanup for Google Requests', () => {
+  function sanitizePayloadForGoogle(body: Buffer): Buffer {
+    if (!body || body.length === 0) return body;
+    try {
+      const text = body.toString('utf-8');
+      if (!text.trim().startsWith('{')) return body;
+      const json = JSON.parse(text) as Record<string, unknown>;
+
+      let modified = false;
+      const cleanObject = (obj: Record<string, unknown>) => {
+        if (!obj || typeof obj !== 'object') return;
+        if ('modelId' in obj) {
+          delete obj.modelId;
+          modified = true;
+        }
+        if ('model_id' in obj) {
+          delete obj.model_id;
+          modified = true;
+        }
+        for (const key of Object.keys(obj)) {
+          const val = obj[key];
+          if (val && typeof val === 'object') {
+            cleanObject(val as Record<string, unknown>);
+          }
+        }
+      };
+
+      cleanObject(json);
+
+      if (modified) {
+        return Buffer.from(JSON.stringify(json), 'utf-8');
+      }
+    } catch {
+      // Ignore
+    }
+    return body;
+  }
+
+  it('recursively removes modelId and model_id from nested request payload before sending to Google API', () => {
+    const raw = JSON.stringify({
+      model: 'models/gemini-2.5-pro',
+      modelId: 'models/gemini-2.5-pro',
+      model_id: 'models/gemini-2.5-pro',
+      request: {
+        modelId: 'nested-id',
+        contents: [{ parts: [{ text: 'hi' }] }]
+      }
+    });
+    const sanitized = sanitizePayloadForGoogle(Buffer.from(raw, 'utf-8'));
+    const parsed = JSON.parse(sanitized.toString('utf-8'));
+    expect(parsed).toEqual({
+      model: 'models/gemini-2.5-pro',
+      request: {
+        contents: [{ parts: [{ text: 'hi' }] }]
+      }
+    });
+    expect(sanitized.toString('utf-8')).not.toContain('modelId');
+    expect(sanitized.toString('utf-8')).not.toContain('model_id');
+  });
+});

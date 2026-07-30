@@ -7,6 +7,9 @@ import * as path from 'path';
 import { extensionAuthorities } from './customScheme';
 import { updateTrayAgentCount } from './tray';
 import { StorageManager } from './storage';
+import { getAutoSwitchConfigPath, loadAutoSwitchPolicy, saveAutoSwitchPolicy } from './autoSwitch/config';
+import { AutoSwitchPolicy, AutoSwitchRoute } from './autoSwitch/types';
+import { VerifiableModel, verifyModel } from './autoSwitch/verifier';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const cryptoStore = require('./cryptoStore');
@@ -15,6 +18,10 @@ const cryptoStore = require('./cryptoStore');
  * Registers all IPC handlers for the main process.
  */
 export function registerIpcHandlers(storageManager: StorageManager): void {
+  // IDE detection — the renderer polls this to decide whether to show IDE
+  // integration features.  Returning true because Antigravity itself is the IDE.
+  ipcMain.handle('ide:is-installed', async () => true);
+
   // Dialog
   ipcMain.handle('dialog:open-workspace', async () => {
     const result = await dialog.showOpenDialog({
@@ -196,6 +203,63 @@ export function registerIpcHandlers(storageManager: StorageManager): void {
       return { success: false, error: (err as Error).message };
     }
   });
+
+  // Gravity Auto Switch policy. The detailed policy is intentionally separate from
+  // custom_models.json so routing preferences never expose or duplicate API keys.
+  ipcMain.handle('autoSwitch:get-policy', async () => {
+    return loadAutoSwitchPolicy(getAutoSwitchConfigPath(app.getPath('home')));
+  });
+  ipcMain.handle('autoSwitch:save-policy', async (_event, policy: AutoSwitchPolicy) => {
+    return saveAutoSwitchPolicy(getAutoSwitchConfigPath(app.getPath('home')), policy);
+  });
+  ipcMain.handle('autoSwitch:set-enabled', async (_event, enabled: boolean) => {
+    const filePath = getAutoSwitchConfigPath(app.getPath('home'));
+    const policy = loadAutoSwitchPolicy(filePath);
+    policy.enabled = enabled === true;
+    return saveAutoSwitchPolicy(filePath, policy);
+  });
+
+  /**
+   * Probes one of the user's own models and reports what it can actually do.
+   *
+   * This runs in main because the stored API key is encrypted and the renderer
+   * only ever sees a masked version of it.
+   */
+  ipcMain.handle(
+    'autoSwitch:verify-model',
+    async (_event, modelName: string): Promise<VerifyModelResult> => {
+      try {
+        const model = await findStoredModel(modelName);
+        if (!model) {
+          return { ok: false, messages: ['That model is no longer saved. Add it again and retry.'] };
+        }
+
+        const apiKey = await decryptStoredKey(model);
+
+        const verifiable: VerifiableModel = {
+          name: model.name,
+          displayName: model.displayName,
+          provider: model.provider,
+          apiKey,
+          apiUrl: model.apiUrl,
+          externalModelName: model.externalModelName,
+          allowUnauthorized: model.allowUnauthorized,
+        };
+
+        const result = await verifyModel(verifiable, apiKey);
+        // A passing probe is the only thing that may enable a route, which is
+        // what makes "Save" safe for someone who does not know these providers.
+        const route: AutoSwitchRoute = { ...result.route, enabled: result.ok };
+        if (result.ok) await upsertRoute(route);
+        return { ok: result.ok, route, messages: result.messages };
+      } catch (err) {
+        log.error('[Auto Switch] Verification handler failed:', err);
+        return { ok: false, messages: ['Verification could not be completed. Check the model details and try again.'] };
+      }
+    },
+  );
+
+  ipcMain.handle('autoSwitch:reverify-stale', async (): Promise<ReverifyResult> => reverifyStaleRoutes());
 
   // P3-17: Test model connectivity — sends a lightweight HEAD/GET to the model endpoint
   ipcMain.handle('storage:test-model-connection', async (_event, model: TestModelParams) => {
@@ -405,6 +469,147 @@ interface CustomModelFileEntry {
   allowUnauthorized?: boolean;
   encrypted?: boolean;
   [key: string]: unknown;
+}
+
+interface VerifyModelResult {
+  ok: boolean;
+  route?: AutoSwitchRoute;
+  messages: string[];
+}
+
+interface ReverifyResult {
+  checked: number;
+  /** Display names of routes that stopped working and were disabled. */
+  failed: string[];
+}
+
+function getCustomModelsPath(): string {
+  return path.join(app.getPath('home'), '.gemini', 'antigravity', 'custom_models.json');
+}
+
+async function readStoredModels(): Promise<CustomModelFileEntry[]> {
+  try {
+    const content = await fs.readFile(getCustomModelsPath(), 'utf-8');
+    const parsed = JSON.parse(content) as { models?: CustomModelFileEntry[] };
+    return parsed.models || [];
+  } catch {
+    return [];
+  }
+}
+
+async function findStoredModel(modelName: string): Promise<CustomModelFileEntry | undefined> {
+  const models = await readStoredModels();
+  return models.find((m) => m.name === modelName);
+}
+
+async function decryptStoredKey(model: CustomModelFileEntry): Promise<string> {
+  const apiKey = model.apiKey || '';
+  if (!apiKey || apiKey === 'none') return apiKey;
+  try {
+    return cryptoStore.decryptString(apiKey) as string;
+  } catch {
+    // Entries saved before encryption was introduced are already plaintext.
+    return apiKey;
+  }
+}
+
+/**
+ * Re-checks routes whose verification has aged past the user's window.
+ *
+ * A route that no longer passes is disabled rather than silently trusted, so a
+ * revoked key or retired model degrades into "use my manual choice" instead of
+ * failing every request. Safe to call when Auto Switch is unused: it exits early.
+ */
+export async function reverifyStaleRoutes(): Promise<ReverifyResult> {
+  const filePath = getAutoSwitchConfigPath(app.getPath('home'));
+  const policy = loadAutoSwitchPolicy(filePath);
+  if (policy.reverifyDays <= 0 || policy.routes.length === 0) return { checked: 0, failed: [] };
+
+  const cutoff = Date.now() - policy.reverifyDays * 24 * 60 * 60 * 1000;
+  const stale = policy.routes.filter((route) => route.enabled && route.verified.verifiedAt < cutoff);
+  if (stale.length === 0) return { checked: 0, failed: [] };
+
+  const failed: string[] = [];
+  for (const route of stale) {
+    const model = await findStoredModel(route.id);
+    if (!model) {
+      failed.push(route.displayName);
+      route.enabled = false;
+      continue;
+    }
+
+    const apiKey = await decryptStoredKey(model);
+    const result = await verifyModel(
+      {
+        name: model.name,
+        displayName: model.displayName,
+        provider: model.provider,
+        apiKey,
+        apiUrl: model.apiUrl,
+        externalModelName: model.externalModelName,
+        allowUnauthorized: model.allowUnauthorized,
+      },
+      apiKey,
+    );
+
+    Object.assign(route, result.route, { enabled: result.ok });
+    if (!result.ok) failed.push(route.displayName);
+  }
+
+  // Turning routing off when nothing verified remains keeps the policy savable
+  // and leaves the user on their own model choice instead of a broken route.
+  if (!policy.routes.some((route) => route.enabled && route.verified.reachable)) {
+    policy.mode = 'off';
+    policy.chatMode = 'manual';
+    policy.enabled = false;
+  }
+  saveAutoSwitchPolicy(filePath, policy);
+  return { checked: stale.length, failed };
+}
+
+/**
+ * Startup entry point for the optional 30-day re-check.
+ *
+ * Runs detached and never rejects, because Auto Switch maintenance must not be
+ * able to delay or break application launch.
+ */
+export function scheduleAutoSwitchReverification(): void {
+  setTimeout(() => {
+    void reverifyStaleRoutes()
+      .then(({ checked, failed }) => {
+        if (checked === 0) return;
+        log.info(`[Auto Switch] Re-verified ${checked} model(s); ${failed.length} failed.`);
+        if (failed.length === 0 || !Notification.isSupported()) return;
+        new Notification({
+          title: 'Gravity Auto Switch needs attention',
+          body: `${failed.join(', ')} stopped responding and ${failed.length === 1 ? 'was' : 'were'} switched off. Open Customization to verify ${failed.length === 1 ? 'it' : 'them'} again.`,
+        }).show();
+      })
+      .catch((err) => log.error('[Auto Switch] Scheduled re-verification failed:', err));
+  }, 15_000).unref?.();
+}
+
+/**
+ * Stores a freshly verified route without disturbing the user's other settings.
+ * Verification results are written immediately so a passing probe is never lost
+ * if the window is closed before Save.
+ */
+async function upsertRoute(route: AutoSwitchRoute): Promise<void> {
+  const filePath = getAutoSwitchConfigPath(app.getPath('home'));
+  const policy = loadAutoSwitchPolicy(filePath);
+  const index = policy.routes.findIndex((existing) => existing.id === route.id);
+  if (index === -1) {
+    const highestPriority = policy.routes
+      .filter((existing) => existing.tier === route.tier)
+      .reduce((highest, existing) => Math.max(highest, existing.priority), 0);
+    policy.routes.push({ ...route, priority: highestPriority + 1 });
+  } else {
+    // Verification refreshes facts about the model, never the user's chosen
+    // tier, primary, or fallback placement.
+    const existing = policy.routes[index];
+    policy.routes[index] = { ...route, tier: existing.tier, priority: existing.priority, enabled: existing.enabled };
+  }
+  saveAutoSwitchPolicy(filePath, policy);
 }
 
 interface TestModelParams {

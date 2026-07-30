@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, session, Menu } from 'electron';
 import log from 'electron-log/main';
-import { registerIpcHandlers } from './ipcHandlers';
+import { registerIpcHandlers, scheduleAutoSwitchReverification } from './ipcHandlers';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as readline from 'readline';
@@ -132,6 +132,9 @@ app
 
     // Register IPC handlers
     registerIpcHandlers(storageManager);
+    // Re-check Auto Switch models that have gone stale. Detached so a slow or
+    // unreachable provider can never hold up launch.
+    scheduleAutoSwitchReverification();
     ipcMain.handle('deep-link:get-stored', () => {
       const link = pendingDeepLink;
       pendingDeepLink = null; // Clear after read
