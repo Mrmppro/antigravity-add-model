@@ -467,7 +467,7 @@ function parseRetryAfter(headers) {
     }
     return 0;
 }
-function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount = 0,
+function handleCustomModelRequest(res, model, geminiBody, isStream, retryCount = 0, 
 /**
  * Auto Switch alternates, ordered cheapest-first. Only consulted while no
  * bytes have reached the client, so a fallback can never corrupt a reply that

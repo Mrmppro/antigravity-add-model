@@ -10,13 +10,11 @@ Write-Host "============================================" -ForegroundColor Cyan
 # 1. Antigravity'yi kapat
 Write-Host ""
 Write-Host "[1/7] Antigravity kapatiliyor..." -ForegroundColor Yellow
-Stop-Process -Name "Antigravity" -Force -ErrorAction SilentlyContinue
-Stop-Process -Name "language_server" -Force -ErrorAction SilentlyContinue
+Get-Process -Name "Antigravity", "language_server" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
 Write-Host "   OK" -ForegroundColor Green
 
 # 2. Yollari tanimla
-# P2-10: Use script's own directory instead of hardcoded developer path
 $ProjectDir = $PSScriptRoot
 $AsarPath = "$env:LOCALAPPDATA\Programs\antigravity\resources\app.asar"
 $BackupAsar = "$AsarPath.backup"
@@ -26,56 +24,43 @@ $TempDir = Join-Path $env:TEMP "antigravity_safe_deploy"
 $AsarUnpacked = "$AsarPath.unpacked"
 $BackupAsarUnpacked = "$BackupAsar.unpacked"
 
-if (Test-Path $BackupAsar) {
-    $backupSize = (Get-Item $BackupAsar).Length
-    $asarSize = (Get-Item $AsarPath).Length
-    $backupTime = (Get-Item $BackupAsar).LastWriteTime
-    $asarTime = (Get-Item $AsarPath).LastWriteTime
-
-    # Restore backup if current app.asar was truncated/shrank from prior faulty unpack flag
-    if ($asarSize -lt ($backupSize * 0.8) -and $backupSize -gt 1500000) {
-        Write-Host "[2/7] UYARI: app.asar eksik/bozulmus gorunuyor ($asarSize bytes). Orijinal yedekten geri yukleniyor..." -ForegroundColor Yellow
-        Copy-Item $BackupAsar $AsarPath -Force
-        if (Test-Path $BackupAsarUnpacked) {
-            Copy-Item $BackupAsarUnpacked $AsarUnpacked -Recurse -Force
-        }
-        Write-Host "   Orijinal yedek geri yuklendi ($backupSize bytes)." -ForegroundColor Green
-    } elseif ($asarTime -gt $backupTime -and $asarSize -ge ($backupSize * 0.8)) {
-        Write-Host "[2/7] Yeni Antigravity guncellemesi tespit edildi! Yedek yenileniyor..." -ForegroundColor Yellow
+if (Test-Path $AsarPath) {
+    # Backup current app.asar if backup doesn't exist
+    if (-not (Test-Path $BackupAsar)) {
+        Write-Host "[2/7] Yedek yok - mevcuttan yedekleniyor..." -ForegroundColor Yellow
         Copy-Item $AsarPath $BackupAsar -Force
-        if (Test-Path $AsarUnpacked) {
-            Copy-Item $AsarUnpacked $BackupAsarUnpacked -Recurse -Force
-        }
-        Write-Host "   Yedek guncellendi." -ForegroundColor Green
+        Write-Host "   app.asar yedege kopyalandi." -ForegroundColor Green
     } else {
-        Write-Host "[2/7] Yedek bulundu: $BackupAsar ($backupSize bytes)" -ForegroundColor Green
+        Write-Host "[2/7] Orijinal app.asar yedege kopyalaniyor..." -ForegroundColor Yellow
+        Copy-Item $AsarPath $BackupAsar -Force
     }
-    if ((Test-Path $AsarUnpacked) -and -not (Test-Path $BackupAsarUnpacked)) {
-        Write-Host "   Yedek unpacked klasoru olusturuluyor..." -ForegroundColor Yellow
-        Copy-Item $AsarUnpacked $BackupAsarUnpacked -Recurse -Force
-        Write-Host "   Yedek unpacked klasoru olusturuldu." -ForegroundColor Green
-    }
-} elseif (Test-Path $AsarPath) {
-    Write-Host "[2/7] Yedek yok - mevcuttan yedekleniyor..." -ForegroundColor Yellow
-    Copy-Item $AsarPath $BackupAsar -Force
+
+    # Ensure app.asar.unpacked is backed up and synced
     if (Test-Path $AsarUnpacked) {
+        if (Test-Path $BackupAsarUnpacked) { Remove-Item $BackupAsarUnpacked -Recurse -Force }
         Copy-Item $AsarUnpacked $BackupAsarUnpacked -Recurse -Force
+        Write-Host "   app.asar.unpacked yedege kopyalandi." -ForegroundColor Green
     }
-    Write-Host "   Yedek olusturuldu." -ForegroundColor Green
 } else {
     Write-Host "[2/7] HATA: app.asar bulunamadi: $AsarPath" -ForegroundColor Red
     exit 1
 }
 
-# 4. Gecici dizine yedek asar'i ac
-Write-Host "[3/7] Yedek asar aciliyor..." -ForegroundColor Yellow
+# 4. Gecici dizine asar'i ac (app.asar.unpacked tam uyumlu)
+Write-Host "[3/7] app.asar aciliyor..." -ForegroundColor Yellow
 if (Test-Path $TempDir) { Remove-Item $TempDir -Recurse -Force }
 $env:NODE_OPTIONS = "--max-old-space-size=4096"
-npx -y @electron/asar extract $BackupAsar $TempDir
+npx -y @electron/asar extract $AsarPath $TempDir
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "   HATA: asar extract basarisiz!" -ForegroundColor Red
-    exit 1
+    Write-Host "   HATA: asar extract basarisiz! Yedekten geri acilmaya calisiliyor..." -ForegroundColor Red
+    if (Test-Path $BackupAsar) {
+        npx -y @electron/asar extract $BackupAsar $TempDir
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "   HATA: Yedek asar extract de basarisiz!" -ForegroundColor Red
+        exit 1
+    }
 }
 Write-Host "   OK - Gecici dizin: $TempDir" -ForegroundColor Green
 
@@ -103,10 +88,6 @@ if (Test-Path $srcRepack) {
 # 6. Tekrar paketle
 Write-Host "[5/7] app.asar paketleniyor..." -ForegroundColor Yellow
 
-# Mevcut unpacked klasorunu sil ve orijinal unpacked yedeğini geri yukle
-if (Test-Path $AsarUnpacked) { Remove-Item $AsarUnpacked -Recurse -Force }
-if (Test-Path $BackupAsarUnpacked) { Copy-Item $BackupAsarUnpacked $AsarUnpacked -Recurse -Force }
-
 # Paketleme - node_modules klasorunu asar icinde tut (tam boyut 2MB+ korunur)
 npx -y @electron/asar pack $TempDir $AsarPath
 
@@ -132,19 +113,36 @@ $OriginalUrl = "https://daily-cloudcode-pa.googleapis.com"
 $PatchedUrl = "http://localhost:50999/v1internal/xxxxxxx"
 
 if (Test-Path $LsBinary) {
-    $content = [System.IO.File]::ReadAllText($LsBinary, [System.Text.Encoding]::ASCII)
+    $outBytes = [System.IO.File]::ReadAllBytes($LsBinary)
+    $content = [System.Text.Encoding]::ASCII.GetString($outBytes)
+    
     if ($content.Contains($PatchedUrl)) {
         Write-Host "   OK - Binary zaten patch'li" -ForegroundColor Green
     } else {
-        $offset = $content.IndexOf($OriginalUrl, [StringComparison]::Ordinal)
+        $offset = $content.IndexOf($OriginalUrl, [System.StringComparison]::Ordinal)
         if ($offset -ge 0) {
             $LsBackup = "$LsBinary.bak"
             if (-not (Test-Path $LsBackup)) { Copy-Item $LsBinary $LsBackup -Force }
             $replaceBytes = [System.Text.Encoding]::ASCII.GetBytes($PatchedUrl)
-            $outBytes = [System.IO.File]::ReadAllBytes($LsBinary)
             [System.Array]::Copy($replaceBytes, 0, $outBytes, $offset, $replaceBytes.Length)
-            [System.IO.File]::WriteAllBytes($LsBinary, $outBytes)
-            Write-Host "   OK - Binary patch uygulandi (offset: $offset)" -ForegroundColor Green
+            
+            $written = $false
+            for ($attempt = 1; $attempt -le 5; $attempt++) {
+                try {
+                    Get-Process -Name "language_server" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                    Start-Sleep -Milliseconds 500
+                    [System.IO.File]::WriteAllBytes($LsBinary, $outBytes)
+                    $written = $true
+                    break
+                } catch {
+                    Start-Sleep -Seconds 1
+                }
+            }
+            if ($written) {
+                Write-Host "   OK - Binary patch uygulandi (offset: $offset)" -ForegroundColor Green
+            } else {
+                Write-Host "   HATA: language_server.exe kilitli, patch yazilamadi!" -ForegroundColor Red
+            }
         } else {
             Write-Host "   UYARI: Hardcoded URL bulunamadi! Binary patch atlandi." -ForegroundColor Yellow
         }
@@ -164,7 +162,7 @@ if (Test-Path $ExePath) {
     Write-Host "  Degisiklikler:" -ForegroundColor Gray
     Write-Host "    - MRMPPRO Customization: Models, MCP, Skills & Gravity Auto Switch" -ForegroundColor Magenta
     Write-Host "    - Model placeholder ID'leri (M400-M599) uyumlu hale getirildi" -ForegroundColor Gray
-    Write-Host "    - deploy.ps1 PowerShell derleme hatasi giderildi" -ForegroundColor Gray
+    Write-Host "    - deploy.ps1 ASAR extract ve binary patch hatalari giderildi" -ForegroundColor Gray
     Write-Host "============================================" -ForegroundColor Cyan
 } else {
     Write-Host "  Uyari: Antigravity.exe bulunamadi. Manuel baslatin." -ForegroundColor Yellow
