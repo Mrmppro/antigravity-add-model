@@ -1208,8 +1208,8 @@ window.addEventListener('DOMContentLoaded', () => {
     // Model ID validation
     const validateModelId = () => {
       const val = modelInput.value.trim();
-      if (val && !/^[a-zA-Z0-9._/-]+$/.test(val)) {
-        modelIdError.textContent = 'Use only letters, numbers, dots, hyphens, underscores, forward slashes';
+      if (val && !/^[a-zA-Z0-9._/:-]+$/.test(val)) {
+        modelIdError.textContent = 'Use only letters, numbers, dots, hyphens, underscores, colons, forward slashes';
         modelIdError.style.display = 'block';
         modelInput.style.borderColor = '#ef4444';
       } else {
@@ -1346,8 +1346,8 @@ window.addEventListener('DOMContentLoaded', () => {
         modelIdError.style.display = 'block';
         modelInput.style.borderColor = '#ef4444';
         hasError = true;
-      } else if (!/^[a-zA-Z0-9._/-]+$/.test(modelId)) {
-        modelIdError.textContent = 'Use only letters, numbers, dots, hyphens, underscores, forward slashes';
+      } else if (!/^[a-zA-Z0-9._/:-]+$/.test(modelId)) {
+        modelIdError.textContent = 'Use only letters, numbers, dots, hyphens, underscores, colons, forward slashes';
         modelIdError.style.display = 'block';
         modelInput.style.borderColor = '#ef4444';
         hasError = true;
