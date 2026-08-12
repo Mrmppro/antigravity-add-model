@@ -252,7 +252,7 @@ $patchMarker
 
     const _require = createRequire(import.meta.url);
     const _filename = fileURLToPath(import.meta.url);
-    $dirname = dirname(_filename);
+    const _dirname = dirname(_filename);
 
     let _proxyPort = 0;
 
