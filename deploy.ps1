@@ -7,10 +7,10 @@ Write-Host "  Antigravity Safe Deploy Script" -ForegroundColor Yellow
 Write-Host "  MRMPPRO | Customization, MCP, Skills & Gravity Auto Switch" -ForegroundColor Magenta
 Write-Host "============================================" -ForegroundColor Cyan
 
-# 1. Antigravity'yi kapat
+# 1. Antigravity ve Antigravity IDE'yi kapat
 Write-Host ""
-Write-Host "[1/7] Antigravity kapatiliyor..." -ForegroundColor Yellow
-Get-Process -Name "Antigravity", "language_server" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Write-Host "[1/7] Antigravity ve Antigravity IDE kapatiliyor..." -ForegroundColor Yellow
+Get-Process -Name "Antigravity", "Antigravity IDE", "language_server", "language_server_windows_x64" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
 Write-Host "   OK" -ForegroundColor Green
 
