@@ -106,49 +106,61 @@ Write-Host "   OK" -ForegroundColor Green
 # Temizlik
 Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
 
-# Binary patch - fast string-based (no byte loop on 150MB binary)
-Write-Host "[6/7] Language Server binary patch uygulaniyor..." -ForegroundColor Yellow
-$LsBinary = "$env:LOCALAPPDATA\Programs\antigravity\resources\bin\language_server.exe"
+# Binary patch - fast string-based (covers Antigravity & Antigravity IDE)
+Write-Host "[6/7] Language Server binary patch uygulaniyor (Antigravity & Antigravity IDE)..." -ForegroundColor Yellow
 $OriginalUrl = "https://daily-cloudcode-pa.googleapis.com"
 $PatchedUrl = "http://localhost:50999/v1internal/xxxxxxx"
 
-if (Test-Path $LsBinary) {
-    $outBytes = [System.IO.File]::ReadAllBytes($LsBinary)
-    $content = [System.Text.Encoding]::ASCII.GetString($outBytes)
-    
-    if ($content.Contains($PatchedUrl)) {
-        Write-Host "   OK - Binary zaten patch'li" -ForegroundColor Green
-    } else {
-        $offset = $content.IndexOf($OriginalUrl, [System.StringComparison]::Ordinal)
-        if ($offset -ge 0) {
-            $LsBackup = "$LsBinary.bak"
-            if (-not (Test-Path $LsBackup)) { Copy-Item $LsBinary $LsBackup -Force }
-            $replaceBytes = [System.Text.Encoding]::ASCII.GetBytes($PatchedUrl)
-            [System.Array]::Copy($replaceBytes, 0, $outBytes, $offset, $replaceBytes.Length)
-            
-            $written = $false
-            for ($attempt = 1; $attempt -le 5; $attempt++) {
-                try {
-                    Get-Process -Name "language_server" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-                    Start-Sleep -Milliseconds 500
-                    [System.IO.File]::WriteAllBytes($LsBinary, $outBytes)
-                    $written = $true
-                    break
-                } catch {
-                    Start-Sleep -Seconds 1
+$lsBinaries = Get-ChildItem -Path "$env:LOCALAPPDATA\Programs" -Recurse -Filter "*language_server*.exe" -ErrorAction SilentlyContinue
+
+if ($lsBinaries.Count -gt 0) {
+    Get-Process -Name "language_server*", "language_server_windows_x64*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+
+    foreach ($bin in $lsBinaries) {
+        $binPath = $bin.FullName
+        Write-Host "   Kontrol ediliyor: $binPath..." -ForegroundColor Gray
+        try {
+            $outBytes = [System.IO.File]::ReadAllBytes($binPath)
+            $content = [System.Text.Encoding]::ASCII.GetString($outBytes)
+
+            if ($content.Contains($PatchedUrl)) {
+                Write-Host "   OK - Zaten patch'li" -ForegroundColor Green
+            } else {
+                $offset = $content.IndexOf($OriginalUrl, [System.StringComparison]::Ordinal)
+                if ($offset -ge 0) {
+                    $LsBackup = "$binPath.bak"
+                    if (-not (Test-Path $LsBackup)) { Copy-Item $binPath $LsBackup -Force }
+                    $replaceBytes = [System.Text.Encoding]::ASCII.GetBytes($PatchedUrl)
+                    [System.Array]::Copy($replaceBytes, 0, $outBytes, $offset, $replaceBytes.Length)
+
+                    $written = $false
+                    for ($attempt = 1; $attempt -le 5; $attempt++) {
+                        try {
+                            Get-Process -Name "language_server*", "language_server_windows_x64*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                            Start-Sleep -Milliseconds 500
+                            [System.IO.File]::WriteAllBytes($binPath, $outBytes)
+                            $written = $true
+                            break
+                        } catch {
+                            Start-Sleep -Seconds 1
+                        }
+                    }
+                    if ($written) {
+                        Write-Host "   OK - Binary patch uygulandi (offset: $offset)" -ForegroundColor Green
+                    } else {
+                        Write-Host "   HATA: Binary kilitli, patch yazilamadi!" -ForegroundColor Red
+                    }
+                } else {
+                    Write-Host "   UYARI: Hardcoded URL bulunamadi! Binary patch atlandi." -ForegroundColor Yellow
                 }
             }
-            if ($written) {
-                Write-Host "   OK - Binary patch uygulandi (offset: $offset)" -ForegroundColor Green
-            } else {
-                Write-Host "   HATA: language_server.exe kilitli, patch yazilamadi!" -ForegroundColor Red
-            }
-        } else {
-            Write-Host "   UYARI: Hardcoded URL bulunamadi! Binary patch atlandi." -ForegroundColor Yellow
+        } catch {
+            Write-Host "   HATA: Binary okunamadi/yazilamadi ($binPath): $_" -ForegroundColor Red
         }
     }
 } else {
-    Write-Host "   UYARI: language_server.exe bulunamadi, binary patch atlandi." -ForegroundColor Yellow
+    Write-Host "   UYARI: HICBIR language_server*.exe bulunamadi!" -ForegroundColor Yellow
 }
 
 # 7. Antigravity'yi baslat
