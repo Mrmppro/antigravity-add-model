@@ -1160,9 +1160,13 @@ function handleRequest(req, res) {
                                             'application/x-ipynb+json': true,
                                         };
                                     }
+                                    const placeholderId = generateModelPlaceholderId(m);
                                     result[slug] = entry;
+                                    result[`models/${slug}`] = entry;
+                                    result[placeholderId] = entry;
+                                    result[`models/${placeholderId}`] = entry;
                                     m._slug = slug;
-                                    electron_log_1.default.info(`[Proxy] Custom model "${m.displayName}" => slug: ${slug} => model: ${generateModelPlaceholderId(m)} => thinking: ${cap.isThinking} => images: ${cap.supportsImages}`);
+                                    electron_log_1.default.info(`[Proxy] Custom model "${m.displayName}" => slug: ${slug} => placeholder: ${placeholderId} => registered under all key formats`);
                                 });
                                 return result;
                             }

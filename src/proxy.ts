@@ -1304,10 +1304,14 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
                       'application/x-ipynb+json': true,
                     };
                   }
+                  const placeholderId = generateModelPlaceholderId(m);
                   (result as Record<string, unknown>)[slug] = entry;
+                  (result as Record<string, unknown>)[`models/${slug}`] = entry;
+                  (result as Record<string, unknown>)[placeholderId] = entry;
+                  (result as Record<string, unknown>)[`models/${placeholderId}`] = entry;
                   m._slug = slug;
                   log.info(
-                    `[Proxy] Custom model "${m.displayName}" => slug: ${slug} => model: ${generateModelPlaceholderId(m)} => thinking: ${cap.isThinking} => images: ${cap.supportsImages}`,
+                    `[Proxy] Custom model "${m.displayName}" => slug: ${slug} => placeholder: ${placeholderId} => registered under all key formats`,
                   );
                 });
                 return result;
