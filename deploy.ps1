@@ -163,6 +163,41 @@ if ($lsBinaries.Count -gt 0) {
     Write-Host "   UYARI: HICBIR language_server*.exe bulunamadi!" -ForegroundColor Yellow
 }
 
+# 6b. Antigravity IDE main.js patch
+Write-Host "[6b] Antigravity IDE main.js patch uygulaniyor..." -ForegroundColor Yellow
+$IdeMainPath = "$env:LOCALAPPDATA\Programs\Antigravity IDE\resources\app\out\main.js"
+if (Test-Path $IdeMainPath) {
+    $content = [System.IO.File]::ReadAllText($IdeMainPath)
+    $patchMarker = "// MRMPPRO_GET_AVAILABLE_MODELS_INTERCEPT"
+    if ($content.Contains($patchMarker)) {
+        Write-Host "   OK - IDE main.js zaten patch'li" -ForegroundColor Green
+    } else {
+        $patchCode = @"
+
+$patchMarker
+try {
+  const { app: _mrmpApp, session: _mrmpSession } = require('electron');
+  _mrmpApp.whenReady().then(() => {
+    _mrmpSession.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+      if (details.url && details.url.includes('LanguageServerService/GetAvailableModels')) {
+        const redirectTarget = 'http://127.0.0.1:50999/GetAvailableModels?ls=' + encodeURIComponent(details.url);
+        console.log('[MRMPPRO Proxy Intercept IDE] Redirecting GetAvailableModels to proxy:', redirectTarget);
+        callback({ redirectURL: redirectTarget });
+        return;
+      }
+      callback({});
+    });
+  }).catch(() => {});
+} catch (e) {}
+"@
+        $newContent = $content + "`n" + $patchCode
+        [System.IO.File]::WriteAllText($IdeMainPath, $newContent, (New-Object System.Text.UTF8Encoding $false))
+        Write-Host "   OK - Antigravity IDE main.js patch uygulandi" -ForegroundColor Green
+    }
+} else {
+    Write-Host "   UYARI: Antigravity IDE main.js bulunamadi, atlandi." -ForegroundColor Yellow
+}
+
 # 7. Antigravity'yi baslat
 Write-Host "[7/7] Antigravity baslatiliyor..." -ForegroundColor Yellow
 $ExePath = "$env:LOCALAPPDATA\Programs\antigravity\Antigravity.exe"
