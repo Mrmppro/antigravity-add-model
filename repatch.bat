@@ -1,5 +1,5 @@
 @echo off
-echo Applying Antigravity patch...
+echo Applying Antigravity model patch...
 cd /d "%~dp0"
 call npm run build
 powershell -ExecutionPolicy Bypass -File ".\deploy.ps1"

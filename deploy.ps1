@@ -1,37 +1,37 @@
-# Antigravity Safe Deploy - Sadece dist klasorunu degistirir
-# Orijinal app.asar yedekten geri yuklenir, dist guncellenir, tekrar paketlenir
-# Bu scripti YENI bir PowerShell terminalinden calistirin!
+# Antigravity Safe Deploy - Only modifies the dist folder
+# Original app.asar is backed up, dist is updated, then repacked
+# Run this script from a PowerShell terminal!
 
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  Antigravity Safe Deploy Script" -ForegroundColor Yellow
 Write-Host "  MRMPPRO | Customization, MCP, Skills & Gravity Auto Switch" -ForegroundColor Magenta
 Write-Host "============================================" -ForegroundColor Cyan
 
-# 1. Antigravity ve Antigravity IDE'yi kapat
+# 1. Close Antigravity and Antigravity IDE
 Write-Host ""
-Write-Host "[1/7] Antigravity ve Antigravity IDE kapatiliyor..." -ForegroundColor Yellow
+Write-Host "[1/7] Closing Antigravity and Antigravity IDE..." -ForegroundColor Yellow
 Get-Process -Name "Antigravity", "Antigravity IDE", "language_server", "language_server_windows_x64" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
 Write-Host "   OK" -ForegroundColor Green
 
-# 2. Yollari tanimla
+# 2. Define paths
 $ProjectDir = $PSScriptRoot
 $AsarPath = "$env:LOCALAPPDATA\Programs\antigravity\resources\app.asar"
 $BackupAsar = "$AsarPath.backup"
 $TempDir = Join-Path $env:TEMP "antigravity_safe_deploy"
 
-# 3. Yedek kontrol - yoksa mevcut asar'i yedekle
+# 3. Check backup - back up current app.asar if missing
 $AsarUnpacked = "$AsarPath.unpacked"
 $BackupAsarUnpacked = "$BackupAsar.unpacked"
 
 if (Test-Path $AsarPath) {
     # Backup current app.asar if backup doesn't exist
     if (-not (Test-Path $BackupAsar)) {
-        Write-Host "[2/7] Yedek yok - mevcuttan yedekleniyor..." -ForegroundColor Yellow
+        Write-Host "[2/7] No backup found - backing up from current version..." -ForegroundColor Yellow
         Copy-Item $AsarPath $BackupAsar -Force
-        Write-Host "   app.asar yedege kopyalandi." -ForegroundColor Green
+        Write-Host "   app.asar backed up successfully." -ForegroundColor Green
     } else {
-        Write-Host "[2/7] Orijinal app.asar yedege kopyalaniyor..." -ForegroundColor Yellow
+        Write-Host "[2/7] Backing up original app.asar..." -ForegroundColor Yellow
         Copy-Item $AsarPath $BackupAsar -Force
     }
 
@@ -39,36 +39,36 @@ if (Test-Path $AsarPath) {
     if (Test-Path $AsarUnpacked) {
         if (Test-Path $BackupAsarUnpacked) { Remove-Item $BackupAsarUnpacked -Recurse -Force }
         Copy-Item $AsarUnpacked $BackupAsarUnpacked -Recurse -Force
-        Write-Host "   app.asar.unpacked yedege kopyalandi." -ForegroundColor Green
+        Write-Host "   app.asar.unpacked backed up successfully." -ForegroundColor Green
     }
 } else {
-    Write-Host "[2/7] HATA: app.asar bulunamadi: $AsarPath" -ForegroundColor Red
+    Write-Host "[2/7] ERROR: app.asar not found at: $AsarPath" -ForegroundColor Red
     exit 1
 }
 
-# 4. Gecici dizine asar'i ac (app.asar.unpacked tam uyumlu)
-Write-Host "[3/7] app.asar aciliyor..." -ForegroundColor Yellow
+# 4. Extract app.asar to temporary directory
+Write-Host "[3/7] Extracting app.asar..." -ForegroundColor Yellow
 if (Test-Path $TempDir) { Remove-Item $TempDir -Recurse -Force }
 $env:NODE_OPTIONS = "--max-old-space-size=4096"
 npx -y @electron/asar extract $AsarPath $TempDir
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "   HATA: asar extract basarisiz! Yedekten geri acilmaya calisiliyor..." -ForegroundColor Red
+    Write-Host "   ERROR: asar extraction failed! Attempting extraction from backup..." -ForegroundColor Red
     if (Test-Path $BackupAsar) {
         npx -y @electron/asar extract $BackupAsar $TempDir
     }
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "   HATA: Yedek asar extract de basarisiz!" -ForegroundColor Red
+        Write-Host "   ERROR: Backup asar extraction also failed!" -ForegroundColor Red
         exit 1
     }
 }
-Write-Host "   OK - Gecici dizin: $TempDir" -ForegroundColor Green
+Write-Host "   OK - Temporary folder: $TempDir" -ForegroundColor Green
 
-# 5. Sadece dist klasorunu projeden kopyala ve gereksizleri sil
-Write-Host "[4/7] dist klasoru guncelleniyor ve gereksiz dosyalar temizleniyor..." -ForegroundColor Yellow
-Write-Host "   MRMPPRO: Customization, MCP, Skills & Gravity Auto Switch hazirlaniyor..." -ForegroundColor Magenta
+# 5. Copy dist folder from project and clean up temporary files
+Write-Host "[4/7] Updating dist folder and cleaning temporary files..." -ForegroundColor Yellow
+Write-Host "   MRMPPRO: Preparing Customization, MCP, Skills & Gravity Auto Switch..." -ForegroundColor Magenta
 
-# Temizleme
+# Clean temporary files
 if (Test-Path (Join-Path $TempDir ".git")) { Remove-Item (Join-Path $TempDir ".git") -Recurse -Force }
 if (Test-Path (Join-Path $TempDir "scratch")) { Remove-Item (Join-Path $TempDir "scratch") -Recurse -Force }
 
@@ -77,22 +77,22 @@ $destDist = Join-Path $TempDir "dist"
 
 if (Test-Path $destDist) { Remove-Item $destDist -Recurse -Force }
 Copy-Item $srcDist $destDist -Recurse -Force
-Write-Host "   OK - dist kopyalandi. MRMPPRO customization patch hazir." -ForegroundColor Green
+Write-Host "   OK - dist folder copied. MRMPPRO customization patch ready." -ForegroundColor Green
 
-# repack.ps1 de kopyala (guncel versiyonu)
+# Copy repack.ps1 (latest version)
 $srcRepack = Join-Path $ProjectDir "repack.ps1"
 if (Test-Path $srcRepack) {
     Copy-Item $srcRepack (Join-Path $TempDir "repack.ps1") -Force
 }
 
-# 6. Tekrar paketle
-Write-Host "[5/7] app.asar paketleniyor..." -ForegroundColor Yellow
+# 6. Repack app.asar
+Write-Host "[5/7] Packing app.asar..." -ForegroundColor Yellow
 
-# Paketleme - node_modules klasorunu asar icinde tut (tam boyut 2MB+ korunur)
+# Pack app.asar
 npx -y @electron/asar pack $TempDir $AsarPath
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "   HATA: Paketleme basarisiz! Yedek geri yukleniyor..." -ForegroundColor Red
+    Write-Host "   ERROR: Packing failed! Restoring backup..." -ForegroundColor Red
     Copy-Item $BackupAsar $AsarPath -Force
     if (Test-Path $BackupAsarUnpacked) {
         if (Test-Path $AsarUnpacked) { Remove-Item $AsarUnpacked -Recurse -Force }
@@ -103,11 +103,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "   OK" -ForegroundColor Green
 
-# Temizlik
+# Clean up temp folder
 Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
 
 # Binary patch - fast string-based (covers Antigravity & Antigravity IDE)
-Write-Host "[6/7] Language Server binary patch uygulaniyor (Antigravity & Antigravity IDE)..." -ForegroundColor Yellow
+Write-Host "[6/7] Applying Language Server binary patch (Antigravity & Antigravity IDE)..." -ForegroundColor Yellow
 $OriginalUrl = "https://daily-cloudcode-pa.googleapis.com"
 $PatchedUrl = "http://localhost:50999/v1internal/xxxxxxx"
 
@@ -119,13 +119,13 @@ if ($lsBinaries.Count -gt 0) {
 
     foreach ($bin in $lsBinaries) {
         $binPath = $bin.FullName
-        Write-Host "   Kontrol ediliyor: $binPath..." -ForegroundColor Gray
+        Write-Host "   Checking: $binPath..." -ForegroundColor Gray
         try {
             $outBytes = [System.IO.File]::ReadAllBytes($binPath)
             $content = [System.Text.Encoding]::ASCII.GetString($outBytes)
 
             if ($content.Contains($PatchedUrl)) {
-                Write-Host "   OK - Zaten patch'li" -ForegroundColor Green
+                Write-Host "   OK - Already patched" -ForegroundColor Green
             } else {
                 $offset = $content.IndexOf($OriginalUrl, [System.StringComparison]::Ordinal)
                 if ($offset -ge 0) {
@@ -147,70 +147,189 @@ if ($lsBinaries.Count -gt 0) {
                         }
                     }
                     if ($written) {
-                        Write-Host "   OK - Binary patch uygulandi (offset: $offset)" -ForegroundColor Green
+                        Write-Host "   OK - Binary patch applied (offset: $offset)" -ForegroundColor Green
                     } else {
-                        Write-Host "   HATA: Binary kilitli, patch yazilamadi!" -ForegroundColor Red
+                        Write-Host "   ERROR: Binary file locked, could not write patch!" -ForegroundColor Red
                     }
                 } else {
-                    Write-Host "   UYARI: Hardcoded URL bulunamadi! Binary patch atlandi." -ForegroundColor Yellow
+                    Write-Host "   WARNING: Hardcoded URL not found! Binary patch skipped." -ForegroundColor Yellow
                 }
             }
         } catch {
-            Write-Host "   HATA: Binary okunamadi/yazilamadi ($binPath): $_" -ForegroundColor Red
+            Write-Host "   ERROR: Could not read/write binary ($binPath): $_" -ForegroundColor Red
         }
     }
 } else {
-    Write-Host "   UYARI: HICBIR language_server*.exe bulunamadi!" -ForegroundColor Yellow
+    Write-Host "   WARNING: No language_server*.exe found!" -ForegroundColor Yellow
 }
 
-# 6b. Antigravity IDE main.js patch
-Write-Host "[6b] Antigravity IDE main.js patch uygulaniyor..." -ForegroundColor Yellow
-$IdeMainPath = "$env:LOCALAPPDATA\Programs\Antigravity IDE\resources\app\out\main.js"
+# 6b. Antigravity IDE - Self-sufficient proxy deployment
+Write-Host "[6b] Applying Antigravity IDE proxy and main.js patch..." -ForegroundColor Yellow
+$IdeAppDir = "$env:LOCALAPPDATA\Programs\Antigravity IDE\resources\app"
+$IdeMainPath = "$IdeAppDir\out\main.js"
+$IdeProxyDir = "$IdeAppDir\out\mrmppro-proxy"
+
 if (Test-Path $IdeMainPath) {
-    $content = [System.IO.File]::ReadAllText($IdeMainPath)
-    $patchMarker = "// MRMPPRO_GET_AVAILABLE_MODELS_INTERCEPT"
-    if ($content.Contains($patchMarker)) {
-        Write-Host "   OK - IDE main.js zaten patch'li" -ForegroundColor Green
+    # 6b-i. Copy proxy modules to IDE
+    Write-Host "   [6b-i] Copying proxy modules to Antigravity IDE..." -ForegroundColor Gray
+    if (Test-Path $IdeProxyDir) { Remove-Item $IdeProxyDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $IdeProxyDir -Force | Out-Null
+
+    # Copy compiled dist/ files
+    $distFiles = @(
+        "proxy.js", "proxy.js.map",
+        "cryptoStore.js", "cryptoStore.js.map",
+        "schemaValidator.js", "schemaValidator.js.map",
+        "paths.js", "paths.js.map",
+        "storage.js", "storage.js.map"
+    )
+    foreach ($f in $distFiles) {
+        $src = Join-Path $ProjectDir "dist\$f"
+        if (Test-Path $src) { Copy-Item $src (Join-Path $IdeProxyDir $f) -Force }
+    }
+
+    # Copy subdirectories
+    foreach ($subDir in @("proxy", "autoSwitch", "services")) {
+        $srcSub = Join-Path $ProjectDir "dist\$subDir"
+        $destSub = Join-Path $IdeProxyDir $subDir
+        if (Test-Path $srcSub) {
+            Copy-Item $srcSub $destSub -Recurse -Force
+        }
+    }
+
+    Write-Host "   OK - Proxy modules copied successfully" -ForegroundColor Green
+
+    # 6b-ii. Copy electron-log to IDE's node_modules (if not present)
+    $IdeElectronLog = "$IdeAppDir\node_modules\electron-log"
+    if (-not (Test-Path $IdeElectronLog)) {
+        $srcElectronLog = Join-Path $ProjectDir "node_modules\electron-log"
+        if (Test-Path $srcElectronLog) {
+            Write-Host "   [6b-ii] Copying electron-log to IDE..." -ForegroundColor Gray
+            Copy-Item $srcElectronLog $IdeElectronLog -Recurse -Force
+            Write-Host "   OK - electron-log copied successfully" -ForegroundColor Green
+        } else {
+            Write-Host "   WARNING: electron-log not found in project node_modules" -ForegroundColor Yellow
+        }
     } else {
+        Write-Host "   [6b-ii] electron-log already exists in IDE" -ForegroundColor Green
+    }
+
+    # 6b-iii. Patch main.js with self-sufficient proxy startup
+    $content = [System.IO.File]::ReadAllText($IdeMainPath)
+    $patchMarker = "// MRMPPRO_SELF_SUFFICIENT_PROXY_V2"
+    $oldPatchMarker = "// MRMPPRO_GET_AVAILABLE_MODELS_INTERCEPT"
+
+    $needsPatch = $false
+    if ($content.Contains($patchMarker)) {
+        Write-Host "   [6b-iii] main.js already has V2 patch, updating..." -ForegroundColor Gray
+        $markerIdx = $content.IndexOf($patchMarker)
+        $content = $content.Substring(0, $markerIdx).TrimEnd()
+        $needsPatch = $true
+    } elseif ($content.Contains($oldPatchMarker)) {
+        Write-Host "   [6b-iii] Found old V1 patch, upgrading to V2..." -ForegroundColor Gray
+        $markerIdx = $content.IndexOf($oldPatchMarker)
+        $content = $content.Substring(0, $markerIdx).TrimEnd()
+        $needsPatch = $true
+    } else {
+        $needsPatch = $true
+    }
+
+    if ($needsPatch) {
         $patchCode = @"
 
 $patchMarker
-try {
-  const { app: _mrmpApp, session: _mrmpSession } = require('electron');
-  _mrmpApp.whenReady().then(() => {
-    _mrmpSession.defaultSession.webRequest.onBeforeRequest((details, callback) => {
-      if (details.url && details.url.includes('LanguageServerService/GetAvailableModels')) {
-        const redirectTarget = 'http://127.0.0.1:50999/GetAvailableModels?ls=' + encodeURIComponent(details.url);
-        console.log('[MRMPPRO Proxy Intercept IDE] Redirecting GetAvailableModels to proxy:', redirectTarget);
-        callback({ redirectURL: redirectTarget });
-        return;
-      }
-      callback({});
-    });
-  }).catch(() => {});
-} catch (e) {}
+// MRMPPRO Self-Sufficient Proxy for Antigravity IDE
+// This patch starts a standalone proxy server inside the IDE process,
+// so custom models work without requiring the Antigravity standalone app.
+// NOTE: Uses dynamic import() + createRequire because package.json has "type": "module" (ESM context)
+// and this code is appended to the end of a bundled file where static imports are not allowed.
+(async function _mrmppro_ide_proxy_init() {
+  'use strict';
+  try {
+    const { createRequire } = await import('node:module');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, join } = await import('node:path');
+
+    const _require = createRequire(import.meta.url);
+    const _filename = fileURLToPath(import.meta.url);
+    $dirname = dirname(_filename);
+
+    let _proxyPort = 0;
+
+    // Resolve the proxy module path relative to this file
+    const _proxyModulePath = join(_dirname, 'mrmppro-proxy', 'proxy');
+
+    try {
+      const _proxyModule = _require(_proxyModulePath);
+
+      // Start the proxy server
+      _proxyModule.startProxy().then(function(port) {
+        _proxyPort = port;
+        console.log('[MRMPPRO IDE Proxy] Proxy server started on port ' + port);
+      }).catch(function(err) {
+        console.error('[MRMPPRO IDE Proxy] Failed to start proxy:', err);
+      });
+    } catch (loadErr) {
+      console.error('[MRMPPRO IDE Proxy] Failed to load proxy module from ' + _proxyModulePath + ':', loadErr);
+    }
+
+    // Set up Electron web request interceptors
+    try {
+      const { app: _mrmpApp, session: _mrmpSession } = _require('electron');
+      _mrmpApp.whenReady().then(function() {
+        _mrmpSession.defaultSession.webRequest.onBeforeRequest(function(details, callback) {
+          // Block SetCloudCodeURL to prevent frontend from overriding proxy endpoint
+          if (details.url && details.url.includes('SetCloudCodeURL')) {
+            console.log('[MRMPPRO IDE Proxy] Blocked SetCloudCodeURL:', details.url);
+            callback({ cancel: true });
+            return;
+          }
+
+          // Redirect GetAvailableModels to our local proxy for custom model injection
+          if (details.url && details.url.includes('LanguageServerService/GetAvailableModels')) {
+            var port = _proxyPort || 50999;
+            var redirectTarget = 'http://127.0.0.1:' + port + '/GetAvailableModels?ls=' + encodeURIComponent(details.url);
+            console.log('[MRMPPRO IDE Proxy] Redirecting GetAvailableModels to proxy (port ' + port + ')');
+            callback({ redirectURL: redirectTarget });
+            return;
+          }
+
+          // Pass through all other requests
+          callback({});
+        });
+        console.log('[MRMPPRO IDE Proxy] Web request interceptors registered (SetCloudCodeURL block + GetAvailableModels redirect)');
+      }).catch(function() {});
+    } catch (e) {
+      console.error('[MRMPPRO IDE Proxy] Failed to register web request interceptors:', e);
+    }
+  } catch (initErr) {
+    console.error('[MRMPPRO IDE Proxy] Fatal init error:', initErr);
+  }
+})();
 "@
         $newContent = $content + "`n" + $patchCode
         [System.IO.File]::WriteAllText($IdeMainPath, $newContent, (New-Object System.Text.UTF8Encoding $false))
-        Write-Host "   OK - Antigravity IDE main.js patch uygulandi" -ForegroundColor Green
+        Write-Host "   OK - Antigravity IDE main.js V2 patch applied successfully" -ForegroundColor Green
+        Write-Host "   Features: Standalone Proxy + SetCloudCodeURL Block + GetAvailableModels Redirect" -ForegroundColor Magenta
     }
 } else {
-    Write-Host "   UYARI: Antigravity IDE main.js bulunamadi, atlandi." -ForegroundColor Yellow
+    Write-Host "   WARNING: Antigravity IDE main.js not found, skipping." -ForegroundColor Yellow
 }
 
-# 7. Antigravity'yi baslat
-Write-Host "[7/7] Antigravity baslatiliyor..." -ForegroundColor Yellow
+# 7. Launch Antigravity
+Write-Host "[7/7] Launching Antigravity..." -ForegroundColor Yellow
 $ExePath = "$env:LOCALAPPDATA\Programs\antigravity\Antigravity.exe"
 if (Test-Path $ExePath) {
     Start-Process -FilePath $ExePath
     Write-Host ""
     Write-Host "============================================" -ForegroundColor Cyan
-    Write-Host "  BASARILI! Antigravity yeniden basladi." -ForegroundColor Green
-    Write-Host "  Degisiklikler:" -ForegroundColor Gray
+    Write-Host "  SUCCESS! Antigravity restarted successfully." -ForegroundColor Green
+    Write-Host "  Changes Applied:" -ForegroundColor Gray
     Write-Host "    - MRMPPRO Customization: Models, MCP, Skills & Gravity Auto Switch" -ForegroundColor Magenta
-    Write-Host "    - Model placeholder ID'leri (M400-M599) uyumlu hale getirildi" -ForegroundColor Gray
-    Write-Host "    - deploy.ps1 ASAR extract ve binary patch hatalari giderildi" -ForegroundColor Gray
+    Write-Host "    - Antigravity IDE: Standalone Proxy (works independently)" -ForegroundColor Magenta
+    Write-Host "    - Model placeholder IDs (M400-M599) normalized" -ForegroundColor Gray
+    Write-Host "    - deploy.ps1 ASAR extraction & multi-binary patch resolved" -ForegroundColor Gray
     Write-Host "============================================" -ForegroundColor Cyan
 } else {
-    Write-Host "  Uyari: Antigravity.exe bulunamadi. Manuel baslatin." -ForegroundColor Yellow
+    Write-Host "  Warning: Antigravity.exe not found. Please launch manually." -ForegroundColor Yellow
 }
