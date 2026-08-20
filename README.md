@@ -666,11 +666,16 @@ Auto-restarts up to 3 times in 60 seconds. Check logs at:
 2. Increase `timeout` field in model config (e.g., `"timeout": 180000` for 3 minutes)
 3. Verify network/proxy/VPN settings
 
-### Rate Limiting (429)
-The proxy automatically retries up to 3 times with exponential backoff. If you still see rate limit errors:
-1. Reduce request frequency
-2. Increase `maxRetries` in model config
-3. Check your API provider's rate limit dashboard
+### Google Cloud Data Cloud Telemetry Hook Error (`MODULE_NOT_FOUND`)
+If agent actions or tool calls are blocked with:
+```
+Error: Cannot find module '...\googlecloudtools.datacloud_telemetry\"...\telemetry_hook_bundle.js"'
+```
+**Cause:** The Data Cloud IDE extension automatically registers a pre-tool execution hook plugin with a nested quotes path bug on Windows.
+**Fix:**
+1. Delete the plugin directory:
+   - **Windows:** Delete `C:\Users\<User>\.gemini\config\plugins\googlecloudtools.datacloud_telemetry`
+2. In Antigravity IDE / VS Code, open Extensions (`Ctrl+Shift+X`) and disable **Google Cloud Data Cloud** if telemetry is not required.
 
 ---
 
@@ -712,6 +717,12 @@ Set `DEBUG=antigravity:*` for verbose logging (debug level captures stream parse
 ---
 
 ## Changelog
+
+### v2.8.1 — Antigravity v2.8.1 Compatibility & IDE Model Injection Fix
+- **Fixed (Antigravity IDE)**: Resolved custom models not appearing in the Antigravity IDE chat dropdown. Directly injects computed model slugs and placeholder IDs into `agentModelSorts.groups[].modelIds` across all proxy response paths (main, timeout, parse fallback, network error).
+- **Fixed (Duplicates)**: Eliminated 4x duplicate model entries in the standalone Antigravity model list by registering only the primary canonical slug key in `models` dictionary.
+- **Fixed (Deploy & Sync)**: Updated `deploy.ps1` to terminate process trees using `taskkill /T`, patch IDE `extension.js`, and launch both standalone Antigravity and Antigravity IDE seamlessly.
+- **Maintained**: Full backwards-compatibility for `electronUpdater.getState()` to avoid renderer startup crashes.
 
 ### Gravity Auto Switch v3 — configurable cost-aware routing
 

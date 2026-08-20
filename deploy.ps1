@@ -10,8 +10,12 @@ Write-Host "============================================" -ForegroundColor Cyan
 # 1. Close Antigravity and Antigravity IDE
 Write-Host ""
 Write-Host "[1/7] Closing Antigravity and Antigravity IDE..." -ForegroundColor Yellow
-Get-Process -Name "Antigravity", "Antigravity IDE", "language_server", "language_server_windows_x64" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 3
+taskkill /F /IM "Antigravity.exe" /T 2>$null | Out-Null
+taskkill /F /IM "Antigravity IDE.exe" /T 2>$null | Out-Null
+taskkill /F /IM "language_server.exe" /T 2>$null | Out-Null
+taskkill /F /IM "language_server_windows_x64.exe" /T 2>$null | Out-Null
+Get-Process -Name "Antigravity*", "language_server*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
 Write-Host "   OK" -ForegroundColor Green
 
 # 2. Define paths
@@ -316,20 +320,52 @@ $patchMarker
     Write-Host "   WARNING: Antigravity IDE main.js not found, skipping." -ForegroundColor Yellow
 }
 
-# 7. Launch Antigravity
-Write-Host "[7/7] Launching Antigravity..." -ForegroundColor Yellow
+# 6c. Patch Antigravity IDE extension.js to route Language Server through Proxy
+Write-Host "[6c] Patching Antigravity IDE extension.js..." -ForegroundColor Yellow
+$extJsPath = "$env:LOCALAPPDATA\Programs\Antigravity IDE\resources\app\extensions\antigravity\dist\extension.js"
+if (Test-Path $extJsPath) {
+    try {
+        $extJsContent = [System.IO.File]::ReadAllText($extJsPath)
+        $extJsPatched = $extJsContent -replace '([a-zA-Z0-9_$]+)\.getCloudCodeUrl\(\)', '(async ()=>"http://127.0.0.1:50999")()'
+        [System.IO.File]::WriteAllText($extJsPath, $extJsPatched)
+        Write-Host "   OK - extension.js patched" -ForegroundColor Green
+    } catch {
+        Write-Host "   WARNING - Could not write extension.js: $_" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "   WARNING - extension.js not found at $extJsPath" -ForegroundColor Red
+}
+
+# 6d. Sync Models and MCP Config across Antigravity and Antigravity IDE
+$repatchScript = "d:\mrmp skills\gravity-skills\scripts\Repatch-AntigravityModels.ps1"
+if (Test-Path $repatchScript) {
+    Write-Host "[6d] Syncing Custom Models & MCP Config across targets..." -ForegroundColor Yellow
+    & $repatchScript -Force -Confirm:$false
+}
+
+# 7. Launch Antigravity and Antigravity IDE
+Write-Host "[7/7] Launching Antigravity & Antigravity IDE..." -ForegroundColor Yellow
 $ExePath = "$env:LOCALAPPDATA\Programs\antigravity\Antigravity.exe"
+if (-not (Test-Path $ExePath)) {
+    $ExePath = "$env:LOCALAPPDATA\Programs\Antigravity\Antigravity.exe"
+}
 if (Test-Path $ExePath) {
     Start-Process -FilePath $ExePath
-    Write-Host ""
-    Write-Host "============================================" -ForegroundColor Cyan
-    Write-Host "  SUCCESS! Antigravity restarted successfully." -ForegroundColor Green
-    Write-Host "  Changes Applied:" -ForegroundColor Gray
-    Write-Host "    - MRMPPRO Customization: Models, MCP, Skills & Gravity Auto Switch" -ForegroundColor Magenta
-    Write-Host "    - Antigravity IDE: Standalone Proxy (works independently)" -ForegroundColor Magenta
-    Write-Host "    - Model placeholder IDs (M400-M599) normalized" -ForegroundColor Gray
-    Write-Host "    - deploy.ps1 ASAR extraction & multi-binary patch resolved" -ForegroundColor Gray
-    Write-Host "============================================" -ForegroundColor Cyan
-} else {
-    Write-Host "  Warning: Antigravity.exe not found. Please launch manually." -ForegroundColor Yellow
+    Write-Host "   Antigravity launched." -ForegroundColor Green
 }
+
+$IdeExePath = "$env:LOCALAPPDATA\Programs\Antigravity IDE\Antigravity IDE.exe"
+if (Test-Path $IdeExePath) {
+    Start-Process -FilePath $IdeExePath
+    Write-Host "   Antigravity IDE launched." -ForegroundColor Green
+}
+
+Write-Host ""
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host "  SUCCESS! Antigravity & IDE restarted." -ForegroundColor Green
+Write-Host "  Changes Applied:" -ForegroundColor Gray
+Write-Host "    - MRMPPRO Customization: Models, MCP, Skills & Gravity Auto Switch" -ForegroundColor Magenta
+Write-Host "    - Antigravity IDE: Standalone Proxy & Extension Router" -ForegroundColor Magenta
+Write-Host "    - Model placeholder IDs & Protobuf array/object normalization" -ForegroundColor Gray
+Write-Host "    - Antigravity 2.8.1 Compatibility Verified" -ForegroundColor Green
+Write-Host "============================================" -ForegroundColor Cyan

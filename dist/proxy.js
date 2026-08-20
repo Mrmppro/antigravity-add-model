@@ -146,7 +146,20 @@ function logChatAutoDecision(nativeModel, decision) {
     }
 }
 function findCustomModelForRoute(target, models) {
-    return models.find((model) => model.name === target.id || toSlug(model) === target.id || generateModelPlaceholderId(model) === target.id);
+    return models.find((model) => isModelMatch(model, target.id));
+}
+function isModelMatch(m, targetModel, targetId) {
+    if (!targetModel && !targetId)
+        return false;
+    const cleanTarget = targetModel ? targetModel.replace(/^models\//, '').toLowerCase() : '';
+    const cleanTargetId = targetId ? targetId.replace(/^models\//, '').toLowerCase() : '';
+    const cleanName = m.name.replace(/^models\//, '').toLowerCase();
+    const slug = toSlug(m).toLowerCase();
+    const enumName = generateModelPlaceholderId(m).toLowerCase();
+    return (cleanName === cleanTarget ||
+        slug === cleanTarget ||
+        enumName === cleanTarget ||
+        (cleanTargetId !== '' && (cleanName === cleanTargetId || slug === cleanTargetId || enumName === cleanTargetId)));
 }
 /**
  * Resolves an Auto Switch decision into a concrete custom model, together with
@@ -1040,6 +1053,10 @@ function handleRequest(req, res) {
         // 1. Intercept /v1internal:fetchAvailableModels
         if (req.url.includes('/v1internal:fetchAvailableModels')) {
             electron_log_1.default.info('[Proxy] Intercepting fetchAvailableModels request');
+            // Determine if request is from the Language Server or the Main Electron App
+            const userAgent = req.headers['user-agent'] || '';
+            const isLanguageServer = userAgent.includes('Go-http-client') || userAgent.includes('grpc-go') || !userAgent.includes('Mozilla');
+            electron_log_1.default.info(`[Proxy] fetchAvailableModels requested by User-Agent: ${userAgent}`);
             const targetUrl = 'https://daily-cloudcode-pa.googleapis.com';
             const parsedUrl = new URL(req.url, targetUrl);
             const fwdHeaders = {
@@ -1061,19 +1078,25 @@ function handleRequest(req, res) {
                     if (!res.headersSent) {
                         const customModels = loadCustomModels();
                         const mappedCustom = {};
+                        const fallbackModelIds = [];
                         customModels.forEach((m) => {
                             const slug = toSlug(m);
+                            const placeholder = generateModelPlaceholderId(m);
+                            fallbackModelIds.push(slug, placeholder);
                             mappedCustom[slug] = {
                                 displayName: m.displayName,
                                 maxTokens: 1048576,
                                 maxOutputTokens: 4096,
-                                model: generateModelPlaceholderId(m),
+                                model: placeholder,
                                 apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
                                 modelProvider: 'MODEL_PROVIDER_GOOGLE',
                             };
                         });
                         res.writeHead(200, { 'Content-Type': 'application/json' });
-                        res.end(JSON.stringify({ models: mappedCustom }));
+                        res.end(JSON.stringify({
+                            models: mappedCustom,
+                            agentModelSorts: [{ groups: [{ modelIds: fallbackModelIds }] }],
+                        }));
                     }
                 });
                 let googleBody = '';
@@ -1099,6 +1122,8 @@ function handleRequest(req, res) {
                                         temperature: cap.isThinking ? undefined : 0.7,
                                         topP: cap.isThinking ? undefined : 0.9,
                                         topK: cap.isThinking ? undefined : 40,
+                                        apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
+                                        modelProvider: 'MODEL_PROVIDER_GOOGLE',
                                     };
                                 });
                                 return [...mapped, ...target];
@@ -1161,12 +1186,14 @@ function handleRequest(req, res) {
                                         };
                                     }
                                     const placeholderId = generateModelPlaceholderId(m);
+                                    // Only register the slug as the canonical key — the renderer
+                                    // iterates every key in models{} and shows each as a separate
+                                    // entry. Extra keys (models/slug, placeholderId, etc.) caused
+                                    // 4× duplicates. isModelMatch() already handles all name formats
+                                    // for generation routing, so no lookup aliases are needed here.
                                     result[slug] = entry;
-                                    result[`models/${slug}`] = entry;
-                                    result[placeholderId] = entry;
-                                    result[`models/${placeholderId}`] = entry;
                                     m._slug = slug;
-                                    electron_log_1.default.info(`[Proxy] Custom model "${m.displayName}" => slug: ${slug} => placeholder: ${placeholderId} => registered under all key formats`);
+                                    electron_log_1.default.info(`[Proxy] Custom model "${m.displayName}" => slug: ${slug}, placeholder: ${placeholderId}`);
                                 });
                                 return result;
                             }
@@ -1186,41 +1213,59 @@ function handleRequest(req, res) {
                             merged = true;
                         }
                         if (!merged) {
-                            const modelsMap = {};
+                            const mappedCustom = {};
                             customModels.forEach((m) => {
-                                const slug = toSlug(m);
-                                modelsMap[slug] = {
+                                const googleModelTemplate = {
+                                    name: m.name,
+                                    version: '1.0',
                                     displayName: m.displayName,
-                                    recommended: true,
-                                    maxTokens: 1048576,
-                                    maxOutputTokens: 4096,
-                                    tokenizerType: 'LLAMA_WITH_SPECIAL',
-                                    model: generateModelPlaceholderId(m),
-                                    apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
+                                    description: m.description,
+                                    inputTokenLimit: (0, modelUtils_1.detectModelCapabilities)(m, true).maxTokens,
+                                    outputTokenLimit: (0, modelUtils_1.detectModelCapabilities)(m, true).maxOutputTokens,
+                                    supportedGenerationMethods: ['generateContent', 'countTokens'],
+                                    temperature: (0, modelUtils_1.detectModelCapabilities)(m, true).isThinking ? undefined : 0.7,
+                                    topP: (0, modelUtils_1.detectModelCapabilities)(m, true).isThinking ? undefined : 0.9,
+                                    topK: (0, modelUtils_1.detectModelCapabilities)(m, true).isThinking ? undefined : 40,
                                     modelProvider: 'MODEL_PROVIDER_GOOGLE',
+                                    apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
                                 };
-                                m._slug = slug;
+                                const slug = m._slug || toSlug(m);
+                                mappedCustom[slug] = googleModelTemplate;
                             });
-                            googleJson.models = modelsMap;
+                            googleJson.models = Object.assign(googleJson.models || {}, mappedCustom);
                         }
-                        // Inject custom model slugs into agentModelSorts
-                        const customSlugs = customModels.map((m) => m._slug).filter(Boolean);
-                        if (customSlugs.length > 0) {
-                            if (googleJson.agentModelSorts && Array.isArray(googleJson.agentModelSorts)) {
-                                googleJson.agentModelSorts.forEach((sort) => {
-                                    if (sort.groups && Array.isArray(sort.groups)) {
-                                        sort.groups.forEach((group) => {
-                                            if (group.modelIds && Array.isArray(group.modelIds)) {
-                                                customSlugs.forEach((slug) => {
-                                                    if (!group.modelIds.includes(slug)) {
-                                                        group.modelIds.push(slug);
-                                                    }
-                                                });
+                        // Ensure agentModelSorts exists for the IDE so it populates the dropdown!
+                        if (!googleJson.agentModelSorts) {
+                            googleJson.agentModelSorts = [{ groups: [{ modelIds: [] }] }];
+                        }
+                        // Normalize: if Google returns a single object instead of array, wrap it
+                        if (!Array.isArray(googleJson.agentModelSorts)) {
+                            googleJson.agentModelSorts = [googleJson.agentModelSorts];
+                        }
+                        // Inject custom model slugs AND placeholder IDs into agentModelSorts
+                        // Compute slugs directly (do NOT rely on _slug mutation from mergeModels)
+                        const customModelIds = [];
+                        customModels.forEach((m) => {
+                            customModelIds.push(toSlug(m));
+                            customModelIds.push(generateModelPlaceholderId(m));
+                        });
+                        if (customModelIds.length > 0) {
+                            const sorts = googleJson.agentModelSorts;
+                            for (const sort of sorts) {
+                                if (sort.groups && Array.isArray(sort.groups)) {
+                                    for (const group of sort.groups) {
+                                        if (!group.modelIds) {
+                                            group.modelIds = [];
+                                        }
+                                        for (const id of customModelIds) {
+                                            if (!group.modelIds.includes(id)) {
+                                                group.modelIds.push(id);
                                             }
-                                        });
+                                        }
                                     }
-                                });
+                                }
                             }
+                            electron_log_1.default.info(`[Proxy] Injected ${customModelIds.length} custom model IDs into agentModelSorts`);
                         }
                         res.writeHead(200, { 'Content-Type': 'application/json' });
                         res.end(JSON.stringify(googleJson));
@@ -1229,19 +1274,25 @@ function handleRequest(req, res) {
                         electron_log_1.default.error('[Proxy] Parsing fetchAvailableModels failed, returning custom models:', err);
                         const customModels = loadCustomModels();
                         const mappedCustom = {};
+                        const fallbackIds = [];
                         customModels.forEach((m) => {
                             const slug = toSlug(m);
+                            const placeholder = generateModelPlaceholderId(m);
+                            fallbackIds.push(slug, placeholder);
                             mappedCustom[slug] = {
                                 displayName: m.displayName,
                                 maxTokens: 1048576,
                                 maxOutputTokens: 4096,
-                                model: generateModelPlaceholderId(m),
+                                model: placeholder,
                                 apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
                                 modelProvider: 'MODEL_PROVIDER_GOOGLE',
                             };
                         });
                         res.writeHead(200, { 'Content-Type': 'application/json' });
-                        res.end(JSON.stringify({ models: mappedCustom }));
+                        res.end(JSON.stringify({
+                            models: mappedCustom,
+                            agentModelSorts: [{ groups: [{ modelIds: fallbackIds }] }],
+                        }));
                     }
                 });
             });
@@ -1249,19 +1300,25 @@ function handleRequest(req, res) {
                 electron_log_1.default.error('[Proxy] Forwarding fetchAvailableModels failed:', err);
                 const customModels = loadCustomModels();
                 const mappedCustom = {};
+                const fallbackIds = [];
                 customModels.forEach((m) => {
                     const slug = toSlug(m);
+                    const placeholder = generateModelPlaceholderId(m);
+                    fallbackIds.push(slug, placeholder);
                     mappedCustom[slug] = {
                         displayName: m.displayName,
                         maxTokens: 1048576,
                         maxOutputTokens: 4096,
-                        model: generateModelPlaceholderId(m),
+                        model: placeholder,
                         apiProvider: 'API_PROVIDER_GOOGLE_GEMINI',
                         modelProvider: 'MODEL_PROVIDER_GOOGLE',
                     };
                 });
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ models: mappedCustom }));
+                res.end(JSON.stringify({
+                    models: mappedCustom,
+                    agentModelSorts: [{ groups: [{ modelIds: fallbackIds }] }],
+                }));
             });
             if (fullBody && fullBody.length > 0) {
                 googleReq.write(fullBody);
@@ -1374,12 +1431,9 @@ function handleRequest(req, res) {
                     void resolveFileData(actualGeminiBody, req.headers).then(() => handleCustomModelRequest(res, autoSelection.model, actualGeminiBody, isStream, 0, autoSelection.fallbacks));
                     return;
                 }
-                if (modelName) {
+                if (modelName || modelId) {
                     const customModels = loadCustomModels();
-                    const matchedCustomModel = customModels.find((m) => {
-                        const enumName = generateModelPlaceholderId(m);
-                        return m.name === modelName || toSlug(m) === modelName || enumName === modelName || enumName === modelId;
-                    });
+                    const matchedCustomModel = customModels.find((m) => isModelMatch(m, modelName, modelId));
                     if (matchedCustomModel) {
                         electron_log_1.default.info(`[Proxy] Intercepting Cloud Code generation for custom model: ${modelName} => ${matchedCustomModel.displayName}`);
                         const isStream = req.url.includes('streamGenerateContent') || req.url.includes('alt=sse');
