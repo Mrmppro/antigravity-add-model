@@ -229,15 +229,9 @@ app
         hostBridgeToken: hostBridgeServer?.token,
         onPortChanged: (newPort: number) => {
           const newUrl = `${WINDOW_ORIGIN}:${newPort}/`;
-          console.log(`[Auto-Restart] Port changed! Reloading all windows with URL: ${newUrl}`);
-          // Apply cert trust
+          console.log(`[Auto-Restart] Port updated: ${newUrl}`);
+          // Apply cert trust without force-reloading windows (preserves active jobs & UI state)
           setupLocalCertTrust();
-          if (!HEADLESS) {
-            const windows = BrowserWindow.getAllWindows();
-            for (const win of windows) {
-              void win.loadURL(newUrl);
-            }
-          }
         },
       });
     } catch (err) {

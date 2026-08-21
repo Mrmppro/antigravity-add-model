@@ -234,15 +234,9 @@ electron_1.app
             hostBridgeToken: hostBridgeServer?.token,
             onPortChanged: (newPort) => {
                 const newUrl = `${constants_1.WINDOW_ORIGIN}:${newPort}/`;
-                console.log(`[Auto-Restart] Port changed! Reloading all windows with URL: ${newUrl}`);
-                // Apply cert trust
+                console.log(`[Auto-Restart] Port updated: ${newUrl}`);
+                // Apply cert trust without force-reloading windows (preserves active jobs & UI state)
                 (0, languageServer_1.setupLocalCertTrust)();
-                if (!HEADLESS) {
-                    const windows = electron_1.BrowserWindow.getAllWindows();
-                    for (const win of windows) {
-                        void win.loadURL(newUrl);
-                    }
-                }
             },
         });
     }

@@ -237,9 +237,7 @@ function startLanguageServer(port, csrf, options = {}) {
             stdio: ['pipe', 'pipe', 'pipe'],
             env: env,
         });
-        if (!headless) {
-            _lsProcess.stdin?.end();
-        }
+        // Keep stdin pipe open — closing stdin can trigger EOF exit in language server daemons
         const combined = new stream_1.PassThrough();
         _lsProcess.stdout?.pipe(combined, { end: false });
         _lsProcess.stderr?.pipe(combined, { end: false });
@@ -362,9 +360,11 @@ function monitorLsCrashInternal(handle, port, csrf, options) {
             return;
         }
         try {
-            const newHandle = await startLanguageServer(port, csrf, options);
+            const restartPort = _lsPort > 0 ? _lsPort : port;
+            const newHandle = await startLanguageServer(restartPort, csrf, options);
+            const oldPort = _lsPort;
             _lsPort = newHandle.port;
-            if (options.onPortChanged) {
+            if (_lsPort !== oldPort && options.onPortChanged) {
                 options.onPortChanged(_lsPort);
             }
             monitorLsCrashInternal(newHandle, port, csrf, options);
