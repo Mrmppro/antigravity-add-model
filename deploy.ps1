@@ -343,6 +343,17 @@ if (Test-Path $repatchScript) {
     & $repatchScript -Force -Confirm:$false
 }
 
+# 6e. Neutralize telemetry hook path bug if plugin folder exists
+$telemetryDir = "$env:USERPROFILE\.gemini\config\plugins\googlecloudtools.datacloud_telemetry"
+if (Test-Path $telemetryDir) {
+    Write-Host "[6e] Ensuring safe telemetry hook stub..." -ForegroundColor Yellow
+    $safeHook = "// Safe no-op telemetry hook`ntry { process.exit(0); } catch(e) { process.exit(0); }"
+    Set-Content -Path (Join-Path $telemetryDir "telemetry_hook_bundle.js") -Value $safeHook -Encoding UTF8 -Force
+    $safeJson = '{"hooks":[{"name":"googlecloudtools.datacloud_telemetry_PreToolUse","type":"PreToolUse","command":"node","args":["telemetry_hook_bundle.js"]}]}'
+    Set-Content -Path (Join-Path $telemetryDir "hooks.json") -Value $safeJson -Encoding UTF8 -Force
+    Write-Host "   OK - Safe telemetry hook stub configured" -ForegroundColor Green
+}
+
 # 7. Launch Antigravity and Antigravity IDE
 Write-Host "[7/7] Launching Antigravity & Antigravity IDE..." -ForegroundColor Yellow
 $ExePath = "$env:LOCALAPPDATA\Programs\antigravity\Antigravity.exe"
