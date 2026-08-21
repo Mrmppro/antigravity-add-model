@@ -390,9 +390,11 @@ function proxyToGoogle(req: http.IncomingMessage, res: http.ServerResponse, reqB
   };
 
   const proxyReq = https.request(parsedUrl, options, (proxyRes) => {
-    // P0-5: Timeout for Google proxy requests (60s)
-    proxyReq.setTimeout(60_000, () => {
-      log.error('[Proxy] Google proxy request timed out after 60s');
+    // For generation requests (streaming & thinking models), allow up to 15 minutes
+    // and refresh timeout on every data chunk. For metadata requests, use 60s.
+    const timeoutMs = isGeneration ? 900_000 : 60_000;
+    proxyReq.setTimeout(timeoutMs, () => {
+      log.error(`[Proxy] Google proxy ${isGeneration ? 'generation' : 'metadata'} request timed out after ${timeoutMs / 1000}s`);
       proxyReq.destroy();
       if (!res.headersSent) {
         res.writeHead(504, { 'Content-Type': 'application/json' });
@@ -402,7 +404,10 @@ function proxyToGoogle(req: http.IncomingMessage, res: http.ServerResponse, reqB
 
     if (shouldBufferAndModify) {
       const responseChunks: Buffer[] = [];
-      proxyRes.on('data', (chunk) => responseChunks.push(chunk));
+      proxyRes.on('data', (chunk) => {
+        proxyReq.setTimeout(timeoutMs); // Keep-alive on data
+        responseChunks.push(chunk);
+      });
       proxyRes.on('end', () => {
         const fullResBody = Buffer.concat(responseChunks);
         let text: string;
@@ -440,6 +445,9 @@ function proxyToGoogle(req: http.IncomingMessage, res: http.ServerResponse, reqB
       });
     } else {
       res.writeHead(proxyRes.statusCode || 200, proxyRes.headers as Record<string, string>);
+      proxyRes.on('data', () => {
+        proxyReq.setTimeout(timeoutMs); // Keep-alive on streaming data
+      });
       proxyRes.pipe(res);
     }
   });
@@ -1698,6 +1706,9 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
 // ─── Server Start/Stop ────────────────────────────────────────────────────
 
 export function startProxy(): Promise<number> {
+  if (server && proxyPort > 0) {
+    return Promise.resolve(proxyPort);
+  }
   return new Promise((resolve, reject) => {
     server = http.createServer(handleRequest);
 

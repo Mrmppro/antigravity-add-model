@@ -345,9 +345,11 @@ function proxyToGoogle(req, res, reqBody) {
         headers: headers,
     };
     const proxyReq = https.request(parsedUrl, options, (proxyRes) => {
-        // P0-5: Timeout for Google proxy requests (60s)
-        proxyReq.setTimeout(60000, () => {
-            electron_log_1.default.error('[Proxy] Google proxy request timed out after 60s');
+        // For generation requests (streaming & thinking models), allow up to 15 minutes
+        // and refresh timeout on every data chunk. For metadata requests, use 60s.
+        const timeoutMs = isGeneration ? 900000 : 60000;
+        proxyReq.setTimeout(timeoutMs, () => {
+            electron_log_1.default.error(`[Proxy] Google proxy ${isGeneration ? 'generation' : 'metadata'} request timed out after ${timeoutMs / 1000}s`);
             proxyReq.destroy();
             if (!res.headersSent) {
                 res.writeHead(504, { 'Content-Type': 'application/json' });
@@ -356,7 +358,10 @@ function proxyToGoogle(req, res, reqBody) {
         });
         if (shouldBufferAndModify) {
             const responseChunks = [];
-            proxyRes.on('data', (chunk) => responseChunks.push(chunk));
+            proxyRes.on('data', (chunk) => {
+                proxyReq.setTimeout(timeoutMs); // Keep-alive on data
+                responseChunks.push(chunk);
+            });
             proxyRes.on('end', () => {
                 const fullResBody = Buffer.concat(responseChunks);
                 let text;
@@ -390,6 +395,9 @@ function proxyToGoogle(req, res, reqBody) {
         }
         else {
             res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+            proxyRes.on('data', () => {
+                proxyReq.setTimeout(timeoutMs); // Keep-alive on streaming data
+            });
             proxyRes.pipe(res);
         }
     });
@@ -1506,6 +1514,9 @@ function handleRequest(req, res) {
 }
 // ─── Server Start/Stop ────────────────────────────────────────────────────
 function startProxy() {
+    if (server && proxyPort > 0) {
+        return Promise.resolve(proxyPort);
+    }
     return new Promise((resolve, reject) => {
         server = http.createServer(handleRequest);
         // P1-9: Start managed cleanup interval
