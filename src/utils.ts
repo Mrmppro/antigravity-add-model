@@ -1,7 +1,6 @@
 import {
   app,
   BrowserWindow,
-  type BrowserWindowInstance,
   nativeTheme,
   nativeImage,
   powerSaveBlocker,
@@ -71,7 +70,7 @@ function ensureAppIsInDock(): void {
  * Uses a hidden title bar with native traffic lights on macOS.
  * Node integration is disabled and context isolation is enabled for security.
  */
-export function createWindow(url: string): BrowserWindowInstance {
+export function createWindow(url: string): BrowserWindow {
   ensureAppIsInDock();
   const theme = getThemeMode().toUpperCase();
   const isLight = theme.includes('LIGHT');

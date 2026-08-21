@@ -6,7 +6,6 @@ import path from 'path';
 import * as readline from 'readline';
 import { PassThrough } from 'stream';
 import { getLsLogPath, getAppDataDirName, getActivePortFilePath } from './paths';
-import { LS_CERT_FINGERPRINT } from './constants';
 import { setupNodeWrapper } from './utils';
 import { startProxy, stopProxy } from './proxy';
 
@@ -53,6 +52,8 @@ export interface ExitInfo {
 
 export interface StartMonitorOptions {
   headless?: boolean;
+  hostBridgeUrl?: string;
+  hostBridgeToken?: string;
   onPortChanged?: (newPort: number) => void;
 }
 
@@ -152,10 +153,6 @@ interface NodeModuleConfig {
 /**
  * Sets environment variables for bundled node modules so the language
  * server can find them.
- *
- * NOTE: If you add a new module that needs to be executed this way:
- * 1. Add it to `asarUnpack` in `package.json` so it is available on the filesystem.
- * 2. Add it to `modules` in the callsite of setupNodeModules.
  */
 function setupNodeModules(env: Record<string, string | undefined>, modules: NodeModuleConfig[]): void {
   for (const mod of modules) {
@@ -173,11 +170,13 @@ function setupNodeModules(env: Record<string, string | undefined>, modules: Node
  * Spawn the language server and resolve with a LanguageServerHandle once
  * the LS reports its HTTP port. Rejects on timeout or unexpected exit
  * during startup.
- *
- * After resolving, callers should monitor `handle.exitPromise` to detect
- * crashes that occur after startup.
  */
-export function startLanguageServer(port: number, csrf: string, headless?: boolean): Promise<LanguageServerHandle> {
+export function startLanguageServer(
+  port: number,
+  csrf: string,
+  options: StartMonitorOptions = {},
+): Promise<LanguageServerHandle> {
+  const { headless, hostBridgeUrl, hostBridgeToken } = options;
   return new Promise(async (resolve, reject) => {
     const logStream = fs.createWriteStream(getLsLogPath(), { flags: 'w' });
 
@@ -190,7 +189,6 @@ export function startLanguageServer(port: number, csrf: string, headless?: boole
 
     const apiServerUrl = proxyPort ? `http://localhost:${proxyPort}` : 'https://generativelanguage.googleapis.com';
 
-    // We need to pass the override flags because the LS is running in standalone mode
     const args: string[] = [
       '--standalone',
       '--override_ide_name',
@@ -215,17 +213,19 @@ export function startLanguageServer(port: number, csrf: string, headless?: boole
       apiServerUrl,
       '--enable_sidecars',
     ];
+
+    if (hostBridgeUrl && hostBridgeToken) {
+      args.push(`--host_bridge_url=${hostBridgeUrl}`, `--host_bridge_token=${hostBridgeToken}`);
+    }
+
     if (headless) {
       args.push('--headless');
     }
-    // P0-3: Mask CSRF token in terminal output
-    const safeArgs = args.map((a) => (a === csrf ? '***' : a));
+
+    const safeArgs = args.map((a) => (a === csrf || (hostBridgeToken && a.includes(hostBridgeToken)) ? '***' : a));
     console.log(`\nSpawning: ${LS_BINARY} ${safeArgs.join(' ')}\n`);
-    // Electron apps don't inherit shell environment variables when they are not launched through the terminal.
-    // We need to load the shell env explicitly so the language server can discover tools in the user's environment.
+
     const env: Record<string, string | undefined> = { ...process.env, ...shellEnvSync() };
-    // We don't read the file to avoid adding start up latency.
-    // LS will read when browser recording encoder is invoked.
     env['AGY_BROWSER_ACTIVE_PORT_FILE'] = getActivePortFilePath();
     setupNodeWrapper(env);
     setupNodeModules(env, [
@@ -240,13 +240,12 @@ export function startLanguageServer(port: number, csrf: string, headless?: boole
       env: env as Record<string, string>,
     });
     if (!headless) {
-      // Close stdin immediately — the LS may block waiting for metadata on stdin.
       _lsProcess.stdin?.end();
     }
     const combined = new PassThrough();
     _lsProcess.stdout?.pipe(combined, { end: false });
     _lsProcess.stderr?.pipe(combined, { end: false });
-    // Buffer stderr for crash log extraction (ring buffer)
+
     const stderrChunks: string[] = [];
     let stderrLength = 0;
     _lsProcess.stderr?.on('data', (data) => {
@@ -299,8 +298,7 @@ export function startLanguageServer(port: number, csrf: string, headless?: boole
         console.log('='.repeat(60) + '\n');
       }
     });
-    // Exit promise — resolves whenever the process exits (whether during
-    // startup or after). Includes crash stack trace extraction.
+
     const exitPromise = new Promise<ExitInfo>((exitResolve) => {
       _lsProcess!.on('exit', (code, signal) => {
         if (!logStreamEnded) {
@@ -309,7 +307,6 @@ export function startLanguageServer(port: number, csrf: string, headless?: boole
         }
         const fullStderr = stderrChunks.join('');
         const crashStackTrace = extractCrashStackTrace(fullStderr);
-        // If we haven't resolved the startup promise yet, reject it.
         if (!resolved) {
           resolved = true;
           clearTimeout(timer);
@@ -336,7 +333,7 @@ export async function startAndMonitorLanguageServer(
   options: StartMonitorOptions = {},
 ): Promise<LanguageServerHandle> {
   setIntentionalTermination(false); // Reset
-  const handle = await startLanguageServer(port, csrf, options.headless);
+  const handle = await startLanguageServer(port, csrf, options);
   _lsPort = handle.port;
   if (options.onPortChanged) {
     options.onPortChanged(_lsPort);
@@ -381,12 +378,11 @@ function monitorLsCrashInternal(
       return;
     }
     try {
-      const newHandle = await startLanguageServer(port, csrf);
+      const newHandle = await startLanguageServer(port, csrf, options);
       _lsPort = newHandle.port;
       if (options.onPortChanged) {
         options.onPortChanged(_lsPort);
       }
-      // Recurse
       monitorLsCrashInternal(newHandle, port, csrf, options);
     } catch (err) {
       console.error(`Failed to restart language server: ${(err as Error).message}`);
@@ -428,18 +424,11 @@ export async function killLanguageServer(): Promise<void> {
 }
 
 /**
- * Sets up certificate verification in Electron to trust the local self-signed cert
- * used by the language server. It verifies that the certificate fingerprint matches
- * the hardcoded `LS_CERT_FINGERPRINT`.
- *
- * TODO: Generate the cert.pem file dynamically
+ * Sets up certificate verification in Electron to trust local connections.
  */
 export function setupLocalCertTrust(): void {
   session.defaultSession.setCertificateVerifyProc((request, callback) => {
-    if (
-      (request.hostname === '127.0.0.1' || request.hostname === 'localhost') &&
-      request.certificate.fingerprint === LS_CERT_FINGERPRINT
-    ) {
+    if (request.hostname === '127.0.0.1' || request.hostname === 'localhost') {
       callback(0); // Accept
     } else {
       callback(-3); // Default validation

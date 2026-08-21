@@ -40,11 +40,14 @@ exports.getLastState = getLastState;
 exports.initAutoUpdater = initAutoUpdater;
 exports.checkForUpdates = checkForUpdates;
 exports.quitAndInstall = quitAndInstall;
+exports.getHostUpdateStatus = getHostUpdateStatus;
+exports.applyHostUpdate = applyHostUpdate;
 const electron_updater_1 = require("electron-updater");
 const electron_1 = require("electron");
 const path = __importStar(require("path"));
 const child_process_1 = require("child_process");
 const settingsService_1 = require("./services/settingsService");
+const types_1 = require("./types");
 var MenuUpdateStep;
 (function (MenuUpdateStep) {
     MenuUpdateStep["CheckForUpdates"] = "Check for Updates";
@@ -64,6 +67,15 @@ let isManualCheck = false;
 const INITIAL_CHECK_DELAY_MS = 10000; // 10 seconds
 // How often to re-check for updates after the initial check (ms)
 const CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+/**
+ * States in which a newer version is known to exist. Anything else (idle,
+ * checking for updates) means we have nothing newer to offer.
+ */
+const UPDATE_PENDING_STATES = new Set([
+    types_1.UpdateState.AvailableForDownload,
+    types_1.UpdateState.Downloading,
+    types_1.UpdateState.Ready,
+]);
 let updaterInitialized = false;
 let periodicCheckInterval;
 function startAutoUpdateChecks() {
@@ -93,7 +105,7 @@ function setAutoUpdateChecking(enabled) {
     }
 }
 // The last update state broadcast to renderers.
-let lastState = { type: 'idle' };
+let lastState = { type: types_1.UpdateState.Idle };
 /** Broadcast a state change to every open BrowserWindow. */
 function broadcastState(state) {
     lastState = state;
@@ -123,23 +135,12 @@ function updateMenuState(step) {
 /**
  * Initializes the auto-updater and registers IPC handlers.
  * Call once after the first window is created.
- *
- * The updater will:
- * 1. Wait INITIAL_CHECK_DELAY_MS ms, then check for updates.
- * 2. Re-check every CHECK_INTERVAL_MS ms.
- * 3. Download updates automatically in the background.
- * 4. Broadcast state to the renderer so AppUpdateButton can display progress.
  */
 function initAutoUpdater(isHeadless, settingsService) {
-    // In dev mode (npm start), electron-updater skips checks because the app
-    // isn't packaged. Force it to use the dev config file instead.
     if (!electron_1.app.isPackaged) {
         electron_updater_1.autoUpdater.forceDevUpdateConfig = true;
         electron_updater_1.autoUpdater.updateConfigPath = path.join(electron_1.app.getAppPath(), 'dev-app-update.yml');
     }
-    // Set the channel based on architecture and OS.
-    // On Windows, we need to explicitly append '-win' to match the artifact name.
-    // On macOS and linux, Electron automatically appends the OS to the channel name.
     if (process.platform === 'win32') {
         electron_updater_1.autoUpdater.channel = `latest-${process.arch}-win`;
     }
@@ -151,13 +152,13 @@ function initAutoUpdater(isHeadless, settingsService) {
     // Auto-updater event handlers → broadcast to renderer
     electron_updater_1.autoUpdater.on('checking-for-update', () => {
         console.log('[AutoUpdater] Checking for update…');
-        broadcastState({ type: 'checking for updates' });
+        broadcastState({ type: types_1.UpdateState.CheckingForUpdates });
         updateMenuState(MenuUpdateStep.CheckingForUpdates);
     });
     electron_updater_1.autoUpdater.on('update-available', (info) => {
         console.log(`[AutoUpdater] Update available: ${info.version}`);
         broadcastState({
-            type: 'available for download',
+            type: types_1.UpdateState.AvailableForDownload,
             update: { version: info.version },
         });
         updateMenuState(MenuUpdateStep.DownloadingUpdate);
@@ -165,7 +166,7 @@ function initAutoUpdater(isHeadless, settingsService) {
     });
     electron_updater_1.autoUpdater.on('update-not-available', (info) => {
         console.log(`[AutoUpdater] Up to date (${info.version})`);
-        broadcastState({ type: 'idle' });
+        broadcastState({ type: types_1.UpdateState.Idle });
         updateMenuState(MenuUpdateStep.CheckForUpdates);
         if (isManualCheck && !isHeadless) {
             const win = electron_1.BrowserWindow.getFocusedWindow();
@@ -185,13 +186,12 @@ function initAutoUpdater(isHeadless, settingsService) {
         isManualCheck = false;
     });
     electron_updater_1.autoUpdater.on('download-progress', () => {
-        broadcastState({ type: 'downloading' });
+        broadcastState({ type: types_1.UpdateState.Downloading });
         updateMenuState(MenuUpdateStep.DownloadingUpdate);
     });
     electron_updater_1.autoUpdater.on('update-downloaded', (info) => {
         console.log(`[AutoUpdater] Update downloaded: ${info.version}`);
         if (isHeadless) {
-            // Proceed to auto install in headless mode
             if (electron_1.app.isPackaged) {
                 if (process.platform === 'linux') {
                     const downloadedFilePath = info.downloadedFile;
@@ -207,25 +207,23 @@ function initAutoUpdater(isHeadless, settingsService) {
             return;
         }
         broadcastState({
-            type: 'ready',
+            type: types_1.UpdateState.Ready,
             update: { version: info.version },
         });
         updateMenuState(MenuUpdateStep.RestartToUpdate);
     });
     electron_updater_1.autoUpdater.on('error', (err) => {
         console.error('[AutoUpdater] Error:', err.message);
-        broadcastState({ type: 'idle' });
+        broadcastState({ type: types_1.UpdateState.Idle });
         updateMenuState(MenuUpdateStep.CheckForUpdates);
         isManualCheck = false;
     });
-    // Schedule periodic checks if needed
     updaterInitialized = true;
     if (settingsService) {
         setTimeout(async () => {
             const autoCheckEnabled = await settingsService.getSetting(settingsService_1.SettingKey.AUTO_CHECK_FOR_UPDATES);
             setAutoUpdateChecking(autoCheckEnabled);
         }, INITIAL_CHECK_DELAY_MS);
-        // Cancel or restart periodic checks on setting change
         settingsService.onSettingChanged(settingsService_1.SettingKey.AUTO_CHECK_FOR_UPDATES, (enabled) => {
             setAutoUpdateChecking(enabled);
         });
@@ -247,10 +245,44 @@ function quitAndInstall() {
     electron_updater_1.autoUpdater.quitAndInstall();
 }
 /**
- * Electron native quitAndInstall doesn't relaunch the app with command line arguments.
- * This function waits for the app process to quit, manually replaces the executable with
- * the downloaded update, and then relaunches it with the right headless flags.
+ * Builds the update status served to the language server over the loopback
+ * host bridge server.
  */
+function getHostUpdateStatus() {
+    const currentVersion = electron_1.app.getVersion();
+    const state = getLastState();
+    const knownVersion = state.update?.version;
+    const updateAvailable = UPDATE_PENDING_STATES.has(state.type) && knownVersion !== undefined;
+    return {
+        currentVersion,
+        latestVersion: updateAvailable ? knownVersion : currentVersion,
+        updateAvailable,
+    };
+}
+/**
+ * Applies an update on behalf of the language server.
+ */
+function applyHostUpdate() {
+    const state = getLastState();
+    switch (state.type) {
+        case types_1.UpdateState.Ready:
+            if (!electron_1.app.isPackaged) {
+                console.log('[AutoUpdater] Skipping quitAndInstall (requires a packaged app).');
+                return false;
+            }
+            quitAndInstall();
+            return true;
+        case types_1.UpdateState.AvailableForDownload:
+        case types_1.UpdateState.Downloading:
+            console.log('[AutoUpdater] Update already in progress.');
+            return true;
+        case types_1.UpdateState.CheckingForUpdates:
+            return true;
+        default:
+            checkForUpdates();
+            return true;
+    }
+}
 function headlessQuitAndInstall(downloadedFilePath) {
     console.log('[AutoUpdater] Headless mode: Scheduling post-quit restart.');
     try {

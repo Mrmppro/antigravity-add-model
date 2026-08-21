@@ -80,6 +80,9 @@ function registerIpcHandlers(storageManager) {
         }
         electron_updater_1.autoUpdater.quitAndInstall();
     });
+    electron_1.ipcMain.handle('updater:get-state', async () => {
+        return (0, updater_1.getLastState)();
+    });
     // Notifications
     electron_1.ipcMain.handle('notification:send', (_event, options) => {
         const notification = new electron_1.Notification({

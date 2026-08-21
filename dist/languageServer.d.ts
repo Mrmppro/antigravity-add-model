@@ -12,6 +12,8 @@ export interface ExitInfo {
 }
 export interface StartMonitorOptions {
     headless?: boolean;
+    hostBridgeUrl?: string;
+    hostBridgeToken?: string;
     onPortChanged?: (newPort: number) => void;
 }
 /**
@@ -33,11 +35,8 @@ export declare function extractCrashStackTrace(stderr: string): string | undefin
  * Spawn the language server and resolve with a LanguageServerHandle once
  * the LS reports its HTTP port. Rejects on timeout or unexpected exit
  * during startup.
- *
- * After resolving, callers should monitor `handle.exitPromise` to detect
- * crashes that occur after startup.
  */
-export declare function startLanguageServer(port: number, csrf: string, headless?: boolean): Promise<LanguageServerHandle>;
+export declare function startLanguageServer(port: number, csrf: string, options?: StartMonitorOptions): Promise<LanguageServerHandle>;
 /** Sets whether the termination was intentional (suppresses crash reports). */
 export declare function setIntentionalTermination(value: boolean): void;
 /**
@@ -47,11 +46,7 @@ export declare function setIntentionalTermination(value: boolean): void;
 export declare function startAndMonitorLanguageServer(port: number, csrf: string, options?: StartMonitorOptions): Promise<LanguageServerHandle>;
 export declare function killLanguageServer(): Promise<void>;
 /**
- * Sets up certificate verification in Electron to trust the local self-signed cert
- * used by the language server. It verifies that the certificate fingerprint matches
- * the hardcoded `LS_CERT_FINGERPRINT`.
- *
- * TODO: Generate the cert.pem file dynamically
+ * Sets up certificate verification in Electron to trust local connections.
  */
 export declare function setupLocalCertTrust(): void;
 //# sourceMappingURL=languageServer.d.ts.map

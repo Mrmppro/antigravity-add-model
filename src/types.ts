@@ -1,6 +1,3 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.UpdateState = void 0;
 /**
  * The update lifecycle states, as they travel over IPC.
  *
@@ -14,14 +11,15 @@ exports.UpdateState = void 0;
  * This app only emits a subset today. The rest are listed because they are
  * part of the contract, so nobody has to guess at a spelling to add one.
  */
-exports.UpdateState = {
-    Idle: 'idle',
-    Disabled: 'disabled',
-    CheckingForUpdates: 'checking for updates',
-    AvailableForDownload: 'available for download',
-    Downloading: 'downloading',
-    Downloaded: 'downloaded',
-    Updating: 'updating',
-    Ready: 'ready',
-};
-//# sourceMappingURL=types.js.map
+export const UpdateState = {
+  Idle: 'idle',
+  Disabled: 'disabled',
+  CheckingForUpdates: 'checking for updates',
+  AvailableForDownload: 'available for download',
+  Downloading: 'downloading',
+  Downloaded: 'downloaded',
+  Updating: 'updating',
+  Ready: 'ready',
+} as const;
+
+export type UpdateStateType = (typeof UpdateState)[keyof typeof UpdateState];

@@ -1,4 +1,4 @@
-import { type BrowserWindowInstance } from 'electron';
+import { BrowserWindow } from 'electron';
 export declare let showQuitConfirmation: boolean;
 export declare function setShowQuitConfirmation(value: boolean): void;
 export declare function isMacOS(): boolean;
@@ -7,7 +7,7 @@ export declare function isMacOS(): boolean;
  * Uses a hidden title bar with native traffic lights on macOS.
  * Node integration is disabled and context isolation is enabled for security.
  */
-export declare function createWindow(url: string): BrowserWindowInstance;
+export declare function createWindow(url: string): BrowserWindow;
 /**
  * Focuses a window if it exists, or creates a new one.
  */

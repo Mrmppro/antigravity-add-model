@@ -45,6 +45,7 @@ const readline = __importStar(require("readline"));
 const utils_1 = require("./utils");
 const languageServer_1 = require("./languageServer");
 const updater_1 = require("./updater");
+const hostBridgeServer_1 = require("./hostBridgeServer");
 const constants_1 = require("./constants");
 const tray_1 = require("./tray");
 const storage_1 = require("./storage");
@@ -63,6 +64,7 @@ let storageManager;
 let settingsService;
 let hasStartedMainApplication = false;
 let isQuitting = false;
+let hostBridgeServer;
 // ─── Config ────────────────────────────────────────────────────────────────
 // Driven by ELECTRON_OZONE_PLATFORM_HINT=headless env var.
 // This single env var both prevents GTK from crashing (Electron 33+)
@@ -97,6 +99,14 @@ function handleDeepLink(url) {
         pendingDeepLink = url;
     }
 }
+const PROTOCOL = electron_1.app
+    .getName()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+if (!electron_1.app.isDefaultProtocolClient(PROTOCOL)) {
+    electron_1.app.setAsDefaultProtocolClient(PROTOCOL);
+}
 electron_1.app.on('second-instance', (_event, commandLine) => {
     const wins = electron_1.BrowserWindow.getAllWindows();
     if (wins.length > 0) {
@@ -107,17 +117,12 @@ electron_1.app.on('second-instance', (_event, commandLine) => {
         wins[0].focus();
         electron_1.app.focus({ steal: true });
     }
-    const url = commandLine.find((arg) => arg.startsWith('antigravity://'));
+    const url = commandLine.find((arg) => arg.startsWith(`${PROTOCOL}://`));
     if (url) {
         handleDeepLink(url);
     }
 });
 (0, customScheme_1.registerCustomSchemes)();
-// Register as default protocol client for deep linking
-const PROTOCOL = 'antigravity';
-if (!electron_1.app.isDefaultProtocolClient(PROTOCOL)) {
-    electron_1.app.setAsDefaultProtocolClient(PROTOCOL);
-}
 electron_1.app.on('open-url', (event, url) => {
     event.preventDefault();
     handleDeepLink(url);
@@ -137,7 +142,7 @@ electron_1.app
     storageManager = new storage_1.StorageManager(storagePath, settingsService_1.DEFAULTS);
     settingsService = new settingsService_1.SettingsService(storageManager);
     // Handle deep link URL from command line arguments (All platforms)
-    const deepLinkFromArg = process.argv.find((arg) => arg.startsWith('antigravity://'));
+    const deepLinkFromArg = process.argv.find((arg) => arg.startsWith(`${PROTOCOL}://`));
     if (deepLinkFromArg) {
         console.log('Launched with deep link:', deepLinkFromArg);
         pendingDeepLink = deepLinkFromArg;
@@ -164,6 +169,7 @@ electron_1.app
             return;
         }
         if (details.url.includes('LanguageServerService/GetAvailableModels')) {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
             const proxyPort = require('./proxy').getProxyPort();
             if (proxyPort > 0) {
                 const redirectTarget = `http://127.0.0.1:${proxyPort}/GetAvailableModels?ls=${encodeURIComponent(details.url)}`;
@@ -196,7 +202,7 @@ electron_1.app
         return;
     }
     if (!fs.existsSync(languageServer_1.LS_BINARY)) {
-        const msg = `language_server binary not found at:\\n${languageServer_1.LS_BINARY}\\n\\nPlease build/set a valid location.`;
+        const msg = `language_server binary not found at:\n${languageServer_1.LS_BINARY}\n\nPlease build/set a valid location.`;
         if (HEADLESS) {
             console.error('ERROR:', msg);
         }
@@ -208,11 +214,24 @@ electron_1.app
     }
     const csrf = crypto.randomUUID();
     console.log(`Starting app (v${electron_1.app.getVersion()}) with dynamic port…`);
+    // Start host bridge server for 2.9.1 language server update queries
+    try {
+        hostBridgeServer = await (0, hostBridgeServer_1.startHostBridgeServer)({
+            getUpdateStatus: updater_1.getHostUpdateStatus,
+            applyUpdate: updater_1.applyHostUpdate,
+        });
+        console.log(`Host bridge server listening on ${hostBridgeServer.url}`);
+    }
+    catch (err) {
+        console.error('Failed to start host bridge server:', err.message);
+    }
     let handle;
     const targetPort = Number(process.env.JETSKI_LS_PORT) || constants_1.DYNAMIC_PORT;
     try {
         handle = await (0, languageServer_1.startAndMonitorLanguageServer)(targetPort, csrf, {
             headless: HEADLESS,
+            hostBridgeUrl: hostBridgeServer?.url,
+            hostBridgeToken: hostBridgeServer?.token,
             onPortChanged: (newPort) => {
                 const newUrl = `${constants_1.WINDOW_ORIGIN}:${newPort}/`;
                 console.log(`[Auto-Restart] Port changed! Reloading all windows with URL: ${newUrl}`);
@@ -239,11 +258,11 @@ electron_1.app
         return;
     }
     const url = `${constants_1.WINDOW_ORIGIN}:${handle.port}/`;
-    console.log('\\n' + '='.repeat(60));
+    console.log('\n' + '='.repeat(60));
     console.log(`  Local:       ${url}`);
     console.log(`  LS Logs:     ${(0, paths_1.getLsLogPath)()}`);
     console.log(`  Electron Logs: ${main_1.default.transports.file.getFile().path}`);
-    console.log('='.repeat(60) + '\\n');
+    console.log('='.repeat(60) + '\n');
     if (HEADLESS) {
         // In headless mode, forward stdin to the Language Server to allow interaction via terminal.
         const rl = readline.createInterface({
@@ -253,7 +272,7 @@ electron_1.app
         rl.on('line', (line) => {
             const lsProc = (0, languageServer_1.getLsProcess)();
             if (lsProc && lsProc.stdin) {
-                lsProc.stdin.write(line + '\\n');
+                lsProc.stdin.write(line + '\n');
                 console.log('-> Forwarded input to Language Server.');
             }
             else {
@@ -265,15 +284,6 @@ electron_1.app
     if (!HEADLESS) {
         (0, menu_1.setupApplicationMenu)(url);
         const mainWindow = (0, utils_1.createWindow)(url);
-        // Force a single reload after initial load to ensure fresh model list
-        mainWindow.webContents.once('did-finish-load', () => {
-            console.log('[Startup] Initial page loaded. Reloading once to refresh models...');
-            setTimeout(() => {
-                if (!mainWindow.isDestroyed()) {
-                    mainWindow.webContents.reload();
-                }
-            }, 500);
-        });
         if (electron_1.app.dock) {
             const dockMenu = electron_1.Menu.buildFromTemplate([
                 {
@@ -331,6 +341,18 @@ electron_1.app.on('window-all-closed', async () => {
         electron_1.app.dock?.hide();
     }
 });
+async function closeHostBridgeServer() {
+    if (!hostBridgeServer) {
+        return;
+    }
+    try {
+        await hostBridgeServer.close();
+    }
+    catch (err) {
+        console.error('Failed to close host bridge server:', err);
+    }
+    hostBridgeServer = undefined;
+}
 /**
  * Fired just before the app quits (e.g. Cmd+Q on macOS, or after
  * window-all-closed on non-macOS). Ensures the LS is terminated even if
@@ -355,6 +377,7 @@ electron_1.app.on('before-quit', async (event) => {
             }),
             (0, languageServer_1.killLanguageServer)(),
         ]);
+        await closeHostBridgeServer();
         electron_1.app.quit();
         return;
     }

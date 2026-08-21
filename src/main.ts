@@ -14,7 +14,8 @@ import {
   setupLocalCertTrust,
   getLsProcess,
 } from './languageServer';
-import { initAutoUpdater } from './updater';
+import { initAutoUpdater, getHostUpdateStatus, applyHostUpdate } from './updater';
+import { startHostBridgeServer, HostBridgeServerHandle } from './hostBridgeServer';
 import { WINDOW_ORIGIN, DYNAMIC_PORT } from './constants';
 import { createTray } from './tray';
 import { StorageManager } from './storage';
@@ -36,6 +37,7 @@ let storageManager: StorageManager;
 let settingsService: SettingsService;
 let hasStartedMainApplication = false;
 let isQuitting = false;
+let hostBridgeServer: HostBridgeServerHandle | undefined;
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
@@ -78,6 +80,15 @@ function handleDeepLink(url: string): void {
   }
 }
 
+const PROTOCOL = app
+  .getName()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-')
+  .replace(/^-|-$/g, '');
+if (!app.isDefaultProtocolClient(PROTOCOL)) {
+  app.setAsDefaultProtocolClient(PROTOCOL);
+}
+
 app.on('second-instance', (_event, commandLine: string[]) => {
   const wins = BrowserWindow.getAllWindows();
   if (wins.length > 0) {
@@ -88,19 +99,13 @@ app.on('second-instance', (_event, commandLine: string[]) => {
     wins[0].focus();
     app.focus({ steal: true });
   }
-  const url = commandLine.find((arg) => arg.startsWith('antigravity://'));
+  const url = commandLine.find((arg) => arg.startsWith(`${PROTOCOL}://`));
   if (url) {
     handleDeepLink(url);
   }
 });
 
 registerCustomSchemes();
-
-// Register as default protocol client for deep linking
-const PROTOCOL = 'antigravity';
-if (!app.isDefaultProtocolClient(PROTOCOL)) {
-  app.setAsDefaultProtocolClient(PROTOCOL);
-}
 
 app.on('open-url', (event, url) => {
   event.preventDefault();
@@ -124,7 +129,7 @@ app
     settingsService = new SettingsService(storageManager);
 
     // Handle deep link URL from command line arguments (All platforms)
-    const deepLinkFromArg = process.argv.find((arg) => arg.startsWith('antigravity://'));
+    const deepLinkFromArg = process.argv.find((arg) => arg.startsWith(`${PROTOCOL}://`));
     if (deepLinkFromArg) {
       console.log('Launched with deep link:', deepLinkFromArg);
       pendingDeepLink = deepLinkFromArg;
@@ -154,6 +159,7 @@ app
         return;
       }
       if (details.url.includes('LanguageServerService/GetAvailableModels')) {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
         const proxyPort = (require('./proxy').getProxyPort as () => number)();
         if (proxyPort > 0) {
           const redirectTarget = `http://127.0.0.1:${proxyPort}/GetAvailableModels?ls=${encodeURIComponent(details.url)}`;
@@ -190,7 +196,7 @@ app
     }
 
     if (!fs.existsSync(LS_BINARY)) {
-      const msg = `language_server binary not found at:\\n${LS_BINARY}\\n\\nPlease build/set a valid location.`;
+      const msg = `language_server binary not found at:\n${LS_BINARY}\n\nPlease build/set a valid location.`;
       if (HEADLESS) {
         console.error('ERROR:', msg);
       } else {
@@ -203,11 +209,24 @@ app
     const csrf = crypto.randomUUID();
     console.log(`Starting app (v${app.getVersion()}) with dynamic port…`);
 
+    // Start host bridge server for 2.9.1 language server update queries
+    try {
+      hostBridgeServer = await startHostBridgeServer({
+        getUpdateStatus: getHostUpdateStatus,
+        applyUpdate: applyHostUpdate,
+      });
+      console.log(`Host bridge server listening on ${hostBridgeServer.url}`);
+    } catch (err) {
+      console.error('Failed to start host bridge server:', (err as Error).message);
+    }
+
     let handle: { port: number };
     const targetPort = Number(process.env.JETSKI_LS_PORT) || DYNAMIC_PORT;
     try {
       handle = await startAndMonitorLanguageServer(targetPort, csrf, {
         headless: HEADLESS,
+        hostBridgeUrl: hostBridgeServer?.url,
+        hostBridgeToken: hostBridgeServer?.token,
         onPortChanged: (newPort: number) => {
           const newUrl = `${WINDOW_ORIGIN}:${newPort}/`;
           console.log(`[Auto-Restart] Port changed! Reloading all windows with URL: ${newUrl}`);
@@ -233,11 +252,11 @@ app
     }
 
     const url = `${WINDOW_ORIGIN}:${handle.port}/`;
-    console.log('\\n' + '='.repeat(60));
+    console.log('\n' + '='.repeat(60));
     console.log(`  Local:       ${url}`);
     console.log(`  LS Logs:     ${getLsLogPath()}`);
     console.log(`  Electron Logs: ${log.transports.file.getFile().path}`);
-    console.log('='.repeat(60) + '\\n');
+    console.log('='.repeat(60) + '\n');
 
     if (HEADLESS) {
       // In headless mode, forward stdin to the Language Server to allow interaction via terminal.
@@ -248,7 +267,7 @@ app
       rl.on('line', (line) => {
         const lsProc = getLsProcess();
         if (lsProc && lsProc.stdin) {
-          lsProc.stdin.write(line + '\\n');
+          lsProc.stdin.write(line + '\n');
           console.log('-> Forwarded input to Language Server.');
         } else {
           console.log('Language Server process is not running.');
@@ -260,15 +279,6 @@ app
     if (!HEADLESS) {
       setupApplicationMenu(url);
       const mainWindow = createWindow(url);
-      // Force a single reload after initial load to ensure fresh model list
-      mainWindow.webContents.once('did-finish-load', () => {
-        console.log('[Startup] Initial page loaded. Reloading once to refresh models...');
-        setTimeout(() => {
-          if (!mainWindow.isDestroyed()) {
-            (mainWindow.webContents as any).reload();
-          }
-        }, 500);
-      });
       if (app.dock) {
         const dockMenu = Menu.buildFromTemplate([
           {
@@ -328,6 +338,18 @@ app.on('window-all-closed', async () => {
   }
 });
 
+async function closeHostBridgeServer(): Promise<void> {
+  if (!hostBridgeServer) {
+    return;
+  }
+  try {
+    await hostBridgeServer.close();
+  } catch (err) {
+    console.error('Failed to close host bridge server:', err);
+  }
+  hostBridgeServer = undefined;
+}
+
 /**
  * Fired just before the app quits (e.g. Cmd+Q on macOS, or after
  * window-all-closed on non-macOS). Ensures the LS is terminated even if
@@ -352,6 +374,7 @@ app.on('before-quit', async (event) => {
       }),
       killLanguageServer(),
     ]);
+    await closeHostBridgeServer();
     app.quit();
     return;
   }

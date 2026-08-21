@@ -15,55 +15,47 @@ function getLoadingHtml(foregroundColor, backgroundColor) {
 <!DOCTYPE html>
 <html>
 <head>
-<style>
-  body {
-    margin: 0;
-    padding: 0;
-    background: ${backgroundColor};
-    color: ${foregroundColor};
-    font-family: system-ui, -apple-system, sans-serif;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100vh;
-    overflow: hidden;
-    -webkit-app-region: drag;
-    -webkit-user-select: none;
-  }
-  .loader {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 16px;
-  }
-  .loader div {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background-color: ${foregroundColor};
-    opacity: 0.3;
-    animation: dot-pulse 1.5s infinite ease-in-out;
-  }
-  .loader div:nth-child(1) { animation-delay: 0s; }
-  .loader div:nth-child(2) { animation-delay: 0.3s; }
-  .loader div:nth-child(3) { animation-delay: 0.6s; }
-  .text {
-    font-size: 13px;
-    font-weight: 400;
-    letter-spacing: 0.03em;
-    opacity: 0.6;
-  }
-  @keyframes dot-pulse {
-    0%, 100% { opacity: 0.2; transform: scale(0.9); }
-    50% { opacity: 0.7; transform: scale(1.1); }
-  }
-</style>
+  <meta charset="utf-8">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background-color: ${backgroundColor};
+      color: ${foregroundColor};
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      user-select: none;
+      overflow: hidden;
+    }
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(128, 128, 128, 0.2);
+      border-radius: 50%;
+      border-top-color: ${foregroundColor};
+      animation: spin 0.8s ease-in-out infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+  </style>
 </head>
 <body>
-  <div class="loader">
-    <div></div><div></div><div></div>
+  <div class="container">
+    <div class="spinner"></div>
   </div>
-  <div class="text">Loading Antigravity</div>
 </body>
 </html>
   `;

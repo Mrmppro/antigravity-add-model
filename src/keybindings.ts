@@ -1,4 +1,4 @@
-import { BrowserWindow, type BrowserWindowInstance } from 'electron';
+import { BrowserWindow } from 'electron';
 import { isMacOS } from './utils';
 
 interface KeybindingActions {
@@ -6,7 +6,7 @@ interface KeybindingActions {
   onQuitRequested(): void;
 }
 
-export function registerKeybindings(win: BrowserWindowInstance, actions: KeybindingActions): void {
+export function registerKeybindings(win: BrowserWindow, actions: KeybindingActions): void {
   win.webContents.on('before-input-event', (event, input) => {
     if (input.type === 'keyDown') {
       const isCmdOrCtrl = isMacOS() ? input.meta : input.control;
