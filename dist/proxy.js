@@ -385,6 +385,11 @@ function proxyToGoogle(req, res, reqBody) {
                 text = text.replace(/https:(\/\/)daily-cloudcode-pa\.googleapis\.com/g, `http:$1${proxyHost}`);
                 text = text.replace(/https:(\/\/)cloudcode-pa\.googleapis\.com/g, `http:$1${proxyHost}`);
                 text = text.replace(/https:(\/\/)generativelanguage\.googleapis\.com/g, `http:$1${proxyHost}`);
+                // Disable failing V2 WebChannel remote control which triggers aborted connections in language_server
+                if (req.url && req.url.includes('listExperiments')) {
+                    text = text.replace(/"RemoteControlEnabled":\s*true/g, '"RemoteControlEnabled":false');
+                    text = text.replace(/"remote_control_enabled":\s*true/g, '"remote_control_enabled":false');
+                }
                 const modifiedHeaders = { ...proxyRes.headers };
                 delete modifiedHeaders['content-encoding'];
                 const modifiedBuffer = Buffer.from(text, 'utf-8');

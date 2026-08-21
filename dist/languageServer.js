@@ -193,6 +193,8 @@ function startLanguageServer(port, csrf, options = {}) {
         const apiServerUrl = proxyPort ? `http://localhost:${proxyPort}` : 'https://generativelanguage.googleapis.com';
         const args = [
             '--standalone',
+            '--persistent_mode=true',
+            '--disable_telemetry=true',
             '--override_ide_name',
             'antigravity',
             '--subclient_type',

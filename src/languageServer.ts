@@ -191,6 +191,8 @@ export function startLanguageServer(
 
     const args: string[] = [
       '--standalone',
+      '--persistent_mode=true',
+      '--disable_telemetry=true',
       '--override_ide_name',
       'antigravity',
       '--subclient_type',
