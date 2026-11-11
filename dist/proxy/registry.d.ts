@@ -25,6 +25,7 @@ export interface ProviderHeaders {
     Authorization?: string;
     'x-api-key'?: string;
     'anthropic-version'?: string;
+    'anthropic-workspace-id'?: string;
     'x-goog-api-key'?: string;
     'HTTP-Referer'?: string;
     'X-Title'?: string;
@@ -34,7 +35,10 @@ export declare function getTranslator(provider: string): TranslatorModule | null
 export declare function translateRequest(provider: string, geminiBody: unknown, modelName: string): unknown;
 export declare function translateResponse(provider: string, providerRes: unknown, modelName: string): unknown;
 export declare function translateStreamChunk(provider: string, chunk: unknown, modelName: string): unknown;
-export declare function getProviderHeaders(provider: string, apiKey: string): ProviderHeaders;
+export declare function getProviderHeaders(provider: string, apiKey: string, extra?: {
+    workspaceId?: string;
+    anthropicWorkspaceId?: string;
+}): ProviderHeaders;
 export declare function supportsStreaming(provider: string): boolean;
 /**
  * Appends the OpenAI-compatible chat endpoint when the user supplied only a

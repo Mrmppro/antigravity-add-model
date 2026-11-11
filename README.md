@@ -1,53 +1,50 @@
-# Antigravity Custom Model Enabler
+# Antigravity Custom Model Enabler (v2.23.0)
 
 > **Unofficial compatibility patch.** This independent project is not affiliated
 > with, endorsed by, or supported by Google. “Google” and “Antigravity” are used
 > only to describe compatible products; their respective trademark owners retain
 > all rights.
 
-This repository contains a patch for **Google Antigravity** that enables external AI models (OpenAI, Anthropic, Together API, Ollama, Google AI Studio, and any OpenAI-compatible provider) alongside the built-in Gemini models. It injects a local HTTP proxy into the Electron app, reverse-engineers the Cloud Code internal API (`v1internal`), translates request/response formats between providers, and provides an inline "Add Model" UI in the Settings page.
+This repository contains a compatibility patch for **Google Antigravity (v2.23.0)** and **Antigravity IDE (v1.107.0)** that enables external AI models (OpenAI, Anthropic, OpenRouter, DeepSeek, Groq, Mistral, Cerebras, Kimi, Fireworks AI, Ollama, LM Studio, llama.cpp, NVIDIA NIM, Google AI Studio, and any OpenAI-compatible provider) alongside the built-in Gemini models. It embeds a local HTTP proxy into the Electron app, reverse-engineers the Cloud Code internal API (`v1internal`), translates request/response formats between providers, supports WSL 2 remote sessions on Windows, and provides an on-demand **Custom AI Models** modal (`Ctrl+Alt+M` / `Cmd+Option+M`) with zero DOM pollution.
 
-## Gravity Auto Switch — use your API budget deliberately
+## How to Use (Quick Start — v2.23.0)
 
-**Gravity Auto Switch** is an opt-in router for the custom models you add and
-verify. It can send routine requests to a lower-cost model while reserving your
-stronger models for complex or protected work. This can reduce spending on your
-own API accounts, but savings depend on your providers, model prices, prompt
-mix, and the tiers you choose.
+### 1. Deploy the Patch
 
-You stay in control:
+On **Windows**, double-click the batch script matching your target (or run the corresponding PowerShell script):
 
-- Assign every verified custom model to **Cheap**, **Mid-priced**, or
-  **Strong**, then order it as **Primary** or a **Fallback** in that tier.
-- Choose a spending mode: **Budget friendly**, **Balanced**, or **Max
-  performance**. Auto Switch selects from your configured tiers; it does not
-  invent providers or change their prices.
-- Keep a chat in **Manual** mode whenever you want the model you selected to be
-  used exactly as-is. **Google models are never modified or rerouted.**
-- Protected work—such as tool use, function results, attachments, credentials,
-  deployment-related requests, or destructive-operation language—uses the
-  Strong → Mid-priced chain. A route must have its required capabilities
-  verified before it is eligible.
-- When a primary route fails before it produces a response, the configured
-  fallbacks are tried in order. Re-verifying a model refreshes its capabilities
-  without overwriting your tier, priority, or enabled choice.
+- **Both Antigravity Standalone & Antigravity IDE**: `repatch-all.bat` (or `repatch.bat` / `.\deploy.ps1`)
+- **Antigravity Standalone only**: `repatch-antigravity.bat` (or `.\deploy-antigravity.ps1`)
+- **Antigravity IDE only**: `repatch-ide.bat` (or `.\deploy-ide.ps1`)
 
-### Quick start
+On **macOS** or **Linux**, run `npm run build` followed by `bash deploy.sh` (macOS) or `bash deploy_linux.sh` (Linux).
 
-1. Add your API models in **Settings → Models → Custom Models**.
-2. Press **Verify** for each model you want Auto Switch to use.
-3. In **Gravity Auto Switch**, choose each model’s **Use for** tier and set
-   **Primary/Fallback** order with the arrow controls.
-4. Select a spending mode, turn Auto Switch on, then choose **Auto** in the
-   chat mode control.
-5. Check the local log for `tier=` and `priority=` to confirm the selected
-   route.
+### 2. Add & Manage Custom Models
+
+In v2.23.0, the Antigravity UI stays 100% unmodified with **no injected Settings DOM sections**. Instead, open the **Custom AI Models** modal on demand from anywhere:
+
+- **Keyboard Shortcut**: Press **`Ctrl+Alt+M`** (Windows/Linux) or **`Cmd+Option+M`** (macOS)
+- **System Tray Menu**: Right-click the Antigravity tray icon → **⚙ Manage Custom Models (Ctrl+Alt+M)**
+- **Application Menu**: **File → Manage Custom Models...**
+
+Inside the modal you can:
+1. Click **Add Model** and pick one of the **15 provider presets** (API URL is auto-filled).
+2. Enter the provider's **Model Name / ID** (e.g. `gpt-4o`, `claude-sonnet-4-5`, `deepseek-chat`), optional **Display Name**, and **API Key** (encrypted via Electron `safeStorage`).
+3. Click **Test Connection** to verify reachability/auth, then **Save Model**.
+4. **Edit** existing models (leave the API Key blank to keep your existing encrypted key), **Search** when you have more than 3 models, or **Delete** inline without blocking dialogs.
+5. **Key Recovery**: If Antigravity was reinstalled and encrypted keys can no longer be decrypted, a warning banner offers **Batch Fix OpenRouter** to re-encrypt keys in one step.
+6. Select your custom model directly from the Antigravity chat model dropdown.
+
+### 3. Connect to WSL 2 (Windows)
+
+Antigravity v2.23.0 includes built-in WSL 2 support on Windows:
+- Open **File → Connect to WSL** or right-click the **System Tray icon → Connect to WSL** and choose a WSL 2 distro (automatically downloads and SHA-256 verifies the Linux `language_server` into `~/.antigravity-server/bin/<version>/`).
+- Switch back at any time via **Reopen Locally**, or launch directly with `--wsl-distro=<DistroName>` / `ANTIGRAVITY_WSL_DISTRO=<DistroName>`.
+
+## Gravity Auto Switch — Routing Status in v2.23.0
 
 > [!NOTE]
-> Image/attachment support is deliberately conservative: a model must first
-> prove that capability during verification. Until then, an attachment request
-> is left on the manually selected model instead of being sent to an unproven
-> route. See the detailed [Gravity Auto Switch guide](docs/gravity-auto-switch.md).
+> **Status in v2.23.0**: To keep the Antigravity UI completely clean and leave full manual control over model selection, **automatic chat rerouting (`resolveAutoSwitchModel`) and injected Auto Switch UI cards are disabled in v2.23.0**. Your manually selected model in the chat dropdown is always used directly. The Auto Switch router, verifier, and unit tests remain in [src/autoSwitch/](src/autoSwitch) and [docs/gravity-auto-switch.md](docs/gravity-auto-switch.md) for reference.
 
 ## How It Works
 
@@ -89,16 +86,24 @@ Antigravity IDE
 #### UI & App Integration
 | File | Role |
 |---|---|
-| [preload.ts](src/preload.ts) | UI injection: Custom Models dashboard in Settings → Models, inline Add Model modal with animations, connectivity test button |
-| [main.ts](src/main.ts) | App lifecycle: intercepts and blocks `SetCloudCodeURL` requests to prevent the frontend from overriding the proxy endpoint |
-| [ipcHandlers.ts](src/ipcHandlers.ts) | Backend IPC: `storage:get-custom-models`, `storage:save-custom-model`, `storage:delete-custom-model`, `storage:test-model-connection` |
-| [autoSwitch/](src/autoSwitch) | Opt-in Gravity Auto policy validation and rule-based routing for a dedicated `Gravity Auto` model-picker entry; see [Gravity Auto Switch](docs/gravity-auto-switch.md) |
-| [languageServer.ts](src/languageServer.ts) | Modified language server manager, starts proxy on app launch |
+| [preload.ts](src/preload.ts) | Exposes `contextBridge` APIs (`nativeStorage`, `wsl`, `electronNative`, etc.) and renders the on-demand Custom AI Models modal (`Ctrl+Alt+M` / `Cmd+Option+M`) with zero DOM pollution |
+| [main.ts](src/main.ts) | App lifecycle: WSL provisioning splash, `HostBridgeServer`, `SetCloudCodeURL` request blocking, tray & menu setup |
+| [ipcHandlers.ts](src/ipcHandlers.ts) | Backend IPC: custom model CRUD (`storage:get-custom-models`, `storage:save-custom-model`, `storage:delete-custom-model`, `storage:test-model-connection`, `storage:update-provider-keys`), WSL, zoom, and native context menus |
+| [wsl.ts](src/wsl.ts) | WSL 2 distro discovery, Linux `language_server` provisioning with SHA-256 verification, and Windows/POSIX path translation |
+| [provisionSplash.ts](src/provisionSplash.ts) | Frameless progress window shown during first-run WSL server download/install |
+| [hostBridgeServer.ts](src/hostBridgeServer.ts) | ConnectRPC `HostBridgeServer` for language server host update queries |
+| [autoSwitch/](src/autoSwitch) | Gravity Auto policy validation, verifier, and router modules (automatic chat rerouting is currently disabled in [proxy.ts](src/proxy.ts); see [Gravity Auto Switch](docs/gravity-auto-switch.md)) |
+| [languageServer.ts](src/languageServer.ts) | Modified language server manager (local & WSL spawn, `ANTIGRAVITY_OPEN_URL` handling, starts proxy on launch) |
 
 #### Deployment Scripts
-| File | Platform |
+| File | Platform / Target |
 |---|---|
-| [deploy.ps1](deploy.ps1) | Windows — stops Antigravity, packs `dist/` into `app.asar`, restarts |
+| [repatch-all.bat](repatch-all.bat) / [repatch.bat](repatch.bat) | Windows — builds TypeScript and runs `deploy.ps1` (Standalone + IDE) |
+| [repatch-antigravity.bat](repatch-antigravity.bat) | Windows — builds TypeScript and runs `deploy-antigravity.ps1` (Standalone only) |
+| [repatch-ide.bat](repatch-ide.bat) | Windows — builds TypeScript and runs `deploy-ide.ps1` (Antigravity IDE only) |
+| [deploy.ps1](deploy.ps1) | Windows — all-in-one deploy for Antigravity Standalone (`app.asar`) and Antigravity IDE |
+| [deploy-antigravity.ps1](deploy-antigravity.ps1) | Windows — deploys `dist/` into Antigravity Standalone `app.asar` and patches `language_server.exe` |
+| [deploy-ide.ps1](deploy-ide.ps1) | Windows — deploys standalone CommonJS proxy (`out/mrmppro-proxy/`) and patches Antigravity IDE |
 | [deploy.sh](deploy.sh) | macOS — extracts `app.asar` from `/Applications/`, replaces `dist/`, repacks and relaunches |
 | [deploy_linux.sh](deploy_linux.sh) | Linux — auto-detects installation path across standard Electron app directories |
 | [repack.ps1](repack.ps1) | Repacks existing `app.asar` with updated `dist/` files |
@@ -165,7 +170,9 @@ The proxy automatically detects DSML blocks, parses them into Gemini-format `fun
 
 ### Anthropic Tool Calling
 
-Claude models (`anthropic` provider) return tool calls as `tool_use` content blocks. The proxy maps these to Gemini-format `functionCall` parts, sets `finishReason: "TOOL_CALL"`, and stores tool call IDs for later matching with `functionResponse` objects in subsequent turns. Both streaming (SSE `content_block_start`/`content_block_delta`) and non-streaming responses are fully handled.
+Claude models (`anthropic` provider and Anthropic-compatible endpoints such as `deepseek`, `kimi`, `fireworks`, `lmstudio`, `llamacpp`, `wafer`, `zai`) return tool calls as `tool_use` content blocks. The proxy maps these to Gemini-format `functionCall` parts, sets `finishReason: "TOOL_CALL"`, and stores tool call IDs for later matching with `functionResponse` objects in subsequent turns. Both streaming (SSE `content_block_start`/`content_block_delta`) and non-streaming responses are fully handled.
+
+In v2.23.0, `normalizeSchemaForAnthropic()` converts Gemini tool parameter schemas (uppercase types, `nullable`, `propertyOrdering`, missing property types, and invalid `required` entries) into valid JSON Schema Draft 2020-12. Requests use `anthropic-version: 2023-06-01` and optionally include `anthropic-workspace-id` when `workspaceId`, `anthropicWorkspaceId`, or `ANTHROPIC_WORKSPACE_ID` is configured.
 
 ### Security: API Key Encryption
 
@@ -224,10 +231,10 @@ The `schemaValidator.ts` module provides runtime validation to catch malformed A
 
 ### Model Connectivity Test
 
-Each custom model in Settings has a **"Test Connection"** button that sends a lightweight request to the model's API endpoint:
+Each custom model row and the Add/Edit form inside the Custom AI Models modal (`Ctrl+Alt+M` / `Cmd+Option+M`) have a **"Test Connection"** button that sends a lightweight request to the model's API endpoint:
 
 - Quick connectivity check (10-second timeout)
-- Green ✅ or red ❌ status indicator
+- Green ✅ or red ❌ status indicator (and row status dot update)
 - Helpful error messages for common issues (auth, timeout, SSL)
 - Implemented via IPC: `storage:test-model-connection`
 
@@ -252,42 +259,62 @@ antigravity-add-model/
 │   │   ├── modelUtils.ts          # Centralized model capability detection
 │   │   └── translators/
 │   │       ├── openai.ts          # OpenAI ↔ Gemini translator
-│   │       ├── anthropic.ts       # Anthropic ↔ Gemini translator
+│   │       ├── anthropic.ts       # Anthropic ↔ Gemini translator + schema normalization
 │   │       ├── google.ts          # Google AI Studio passthrough + stream routing
+│   │       ├── ollama.ts          # Ollama endpoint & OpenAI-compat helpers
 │   │       └── utils.ts           # Shared translator utilities (DSML, tool calls)
-│   ├── languageServer.ts          # Modified language server manager
-│   ├── ipcHandlers.ts             # Custom model CRUD + connectivity test IPC
+│   ├── autoSwitch/                # Policy validation, verifier, and router modules
+│   ├── hostBridgeServer.ts        # ConnectRPC HostBridgeServer for LS update queries
+│   ├── proto/
+│   │   └── host_bridge_pb.ts      # HostBridge protobuf schema
+│   ├── wsl.ts                     # WSL 2 discovery, server provisioning, and path translation
+│   ├── provisionSplash.ts         # Frameless WSL server download/install splash screen
+│   ├── languageServer.ts          # Modified language server manager (local & WSL)
+│   ├── ipcHandlers.ts             # Custom model CRUD, WSL, zoom, context menu, and test IPC
 │   ├── cryptoStore.ts             # AES-256-GCM API key encryption/decryption
 │   ├── schemaValidator.ts         # Runtime schema validation for responses & models
-│   ├── preload.ts                 # Settings UI injection (inline Add Model dashboard)
-│   ├── main.ts                    # App lifecycle + SetCloudCodeURL blocking
+│   ├── preload.ts                 # ContextBridge APIs + on-demand Custom AI Models modal
+│   ├── main.ts                    # App lifecycle + WSL setup + SetCloudCodeURL blocking
 │   ├── constants.ts               # Port & cert constants
 │   ├── paths.ts                   # Path utilities
 │   ├── storage.ts                 # StorageManager class
-│   ├── menu.ts                    # Application menu
-│   ├── tray.ts                    # System tray
+│   ├── menu.ts                    # Application menu + Manage Custom Models + WSL Connect
+│   ├── tray.ts                    # System tray + dynamic menu item insertion
 │   ├── updater.ts                 # Auto-updater
 │   ├── customScheme.ts            # Plugin scheme handler
 │   ├── keybindings.ts             # Keyboard shortcuts
 │   ├── loadingOverlay.ts          # Loading screen overlay
-│   ├── types.ts                   # Type definitions
-│   ├── utils.ts                   # Window management & utilities
+│   ├── types.ts / types.d.ts      # Type definitions
+│   ├── utils.ts                   # Window management, zoom persistence & utilities
 │   ├── services/
 │   │   └── settingsService.ts
 │   ├── ideInstall/                # IDE installation wizard
-│   ├── __tests__/                  # Unit tests (vitest)
-│   │   ├── registry.test.ts
-│   │   ├── proxy.test.ts
-│   │   ├── modelUtils.test.ts
+│   ├── __tests__/                 # Unit tests (vitest, 189 tests across 9 files)
 │   │   ├── anthropic.test.ts
+│   │   ├── autoSwitch.proxy.test.ts
+│   │   ├── autoSwitch.router.test.ts
+│   │   ├── modelUtils.test.ts
 │   │   ├── openai.test.ts
-│   │   └── utils.test.ts
-│   ├── __mocks__/                 # Test mocks
+│   │   ├── proxy.test.ts
+│   │   ├── registry.test.ts
+│   │   ├── utils.test.ts
+│   │   └── wsl.test.ts
+│   └── __mocks__/                 # Test mocks
 ├── dist/                          # Compiled JavaScript output
+├── docs/
+│   └── gravity-auto-switch.md     # Gravity Auto Switch architecture guide
 ├── tsconfig.json                  # TypeScript configuration
-├── deploy.ps1                     # Portable PowerShell deploy script
+├── deploy.ps1                     # Windows all-in-one deploy (Standalone + IDE)
+├── deploy-antigravity.ps1         # Windows Standalone-only deploy
+├── deploy-ide.ps1                 # Windows Antigravity IDE-only deploy
+├── deploy.sh                      # macOS deploy script
+├── deploy_linux.sh                # Linux deploy script
+├── repatch-all.bat                # One-click build & deploy (Standalone + IDE)
+├── repatch-antigravity.bat        # One-click build & deploy (Standalone only)
+├── repatch-ide.bat                # One-click build & deploy (IDE only)
+├── repatch.bat                    # One-click build & deploy (alias for deploy.ps1)
 ├── repack.ps1                     # ASAR repack script
-├── package.json                   # Electron app manifest
+├── package.json                   # Electron app manifest (v2.23.0)
 └── README.md
 ```
 
@@ -330,29 +357,37 @@ You can configure **multiple models from different providers simultaneously**. A
 
 ## Installation
 
-### One-Click Re-Deploy (After Antigravity Updates)
+### One-Click Re-Deploy (Windows — Recommended)
 
-When Google releases a new Antigravity version, the update replaces the Language Server binary and custom models stop working. Simply run:
+When Google releases a new Antigravity update, it replaces the Language Server binary and `app.asar`, so custom models stop working until re-patched. On **Windows**, run the batch script matching your installation:
 
-```
-repatch.bat
-```
+| Script | Target | What it runs |
+|---|---|---|
+| `repatch-all.bat` *(or `repatch.bat`)* | **Antigravity Standalone + Antigravity IDE** | `npm run build` + `deploy.ps1` |
+| `repatch-antigravity.bat` | **Antigravity Standalone only** | `npm run build` + `deploy-antigravity.ps1` |
+| `repatch-ide.bat` | **Antigravity IDE only** | `npm run build` + `deploy-ide.ps1` |
 
-Or double-click `repatch.bat` in the project folder. This rebuilds, redeploys the patch, and restarts Antigravity in one step.
+Double-click the `.bat` file (or run it from a terminal) to compile TypeScript, redeploy the patch, and relaunch the app(s).
 
 > [!IMPORTANT]
-> Run `repatch.bat` after **every** Antigravity auto-update to restore custom model support.
+> Run the appropriate `repatch-*.bat` script after **every** Antigravity auto-update to restore custom model support.
 
-### Automatic (Windows)
+### Automatic (Windows PowerShell)
 
 ```powershell
+# All-in-One (Standalone + IDE)
 .\deploy.ps1
+
+# Or target individually:
+.\deploy-antigravity.ps1   # Antigravity Standalone only
+.\deploy-ide.ps1           # Antigravity IDE only
 ```
 
-This stops Antigravity, packs the project's `dist/` into `app.asar`, deploys to `%LOCALAPPDATA%\Programs\antigravity\resources\`, and restarts the app.
+- `deploy.ps1` / `deploy-antigravity.ps1` stop running processes, preserve any existing clean `app.asar.backup`, merge `dist/` into `app.asar` without deleting official files, retry if files are briefly locked, apply the Language Server binary patch, and restart the app.
+- `deploy-ide.ps1` copies proxy modules to `out\mrmppro-proxy\` (with `{"type": "commonjs"}` for IDE ESM compatibility), patches `out\main.js` and `extension.js`, binary-patches `language_server_windows_x64.exe`, and relaunches Antigravity IDE.
 
 > [!TIP]
-> The deploy script uses `$PSScriptRoot` (script's own directory). You can run it from anywhere; it always finds the project.
+> The deploy scripts use `$PSScriptRoot` (their own directory), so you can run them from anywhere.
 
 ### Automatic (macOS)
 
@@ -376,11 +411,12 @@ Stops any running Antigravity process, auto-detects the `app.asar` location (com
 > [!TIP]
 > Make the script executable first: `chmod +x deploy_linux.sh`. It automatically searches for the Antigravity installation across multiple standard Linux Electron app paths.
 
-### Build from Source (TypeScript)
+### Build & Test from Source (TypeScript)
 
 ```bash
 npm install
-npx tsc
+npm run build   # runs npx tsc → dist/
+npm test        # runs vitest (189 tests across 9 files)
 ```
 
 ### Manual (All Platforms)
@@ -389,7 +425,7 @@ npx tsc
 npx -y @electron/asar pack . "<antigravity_resources_dir>/app.asar"
 ```
 
-- **Windows**: `C:\Users\<User>\AppData\Local\Programs\antigravity\resources\`
+- **Windows**: `C:\Users\<User>\AppData\Local\Programs\antigravity\resources\` (or `...\Programs\Antigravity\resources\`)
 - **macOS**: `/Applications/Antigravity.app/Contents/Resources/`
 
 ---
@@ -400,13 +436,13 @@ npx -y @electron/asar pack . "<antigravity_resources_dir>/app.asar"
 
 Starting with **Antigravity v2.0.6**, Google hardcoded the `fetchAvailableModels` API URL to `https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels` inside the Language Server binary. This call **bypasses the local proxy entirely**, meaning:
 
-- Custom models remain in `custom_models.json` and appear in **Settings → Custom Models**
+- Custom models remain in `custom_models.json` and appear in the **Custom AI Models** modal (`Ctrl+Alt+M`)
 - But they **do NOT appear** in the chat model dropdown
 - The chat dropdown only shows Google's built-in Gemini models
 
 ### The Fix: Binary Patch
 
-The `deploy.ps1` / `deploy.sh` / `deploy_linux.sh` scripts **automatically apply a binary patch** to the Language Server executable. The hardcoded URL:
+The `deploy.ps1` / `deploy-antigravity.ps1` / `deploy-ide.ps1` / `deploy.sh` / `deploy_linux.sh` scripts **automatically apply a binary patch** to the Language Server executable. The hardcoded URL:
 
 ```
 https://daily-cloudcode-pa.googleapis.com
@@ -559,42 +595,41 @@ Here is an example of a **fully loaded** `custom_models.json` file configuring *
 |---|---|
 | `name` | Internal model identifier (e.g. `models/gpt-4o`). Must start with `models/` prefix. |
 | `displayName` | The friendly name that will appear in the Antigravity chat model dropdown. |
-| `description` | Subtitle/description displayed in the Custom Models list in Settings. |
-| `provider` | One of `openai`, `anthropic`, `openrouter`, `ollama`, `google`, or `custom`. This determines how the request and response formats are translated. |
-| `apiKey` | The API credential for the provider. Leave empty `""` for local providers like Ollama. |
-| `apiUrl` | The target endpoint. This gets automatically pre-filled by the UI dropdown selection. |
-| `externalModelName` | The exact model ID expected by the target provider (e.g., `gpt-4o`, `claude-3-5-sonnet-latest`, `llama3`). |
+| `description` | Subtitle/description stored with the model entry. |
+| `provider` | Provider key determining translation & auth: `openai`, `anthropic`, `openrouter`, `ollama`, `google`, `deepseek`, `groq`, `mistral`, `cerebras`, `kimi`, `fireworks`, `lmstudio`, `llamacpp`, `nvidia`, `custom` (also supports `opencode`, `codestral`, `wafer`, `zai` in `registry.ts`). |
+| `apiKey` | The API credential for the provider. Leave empty `""` or omit for local providers like Ollama. |
+| `apiUrl` | The target endpoint. Automatically pre-filled by the UI provider selector. |
+| `externalModelName` | The exact model ID expected by the target provider (e.g., `gpt-4o`, `claude-sonnet-4-5`, `llama3`). |
+| `workspaceId` / `anthropicWorkspaceId` | (Optional, Anthropic) Sends `anthropic-workspace-id` header (can also be set via `ANTHROPIC_WORKSPACE_ID`). |
 | `allowUnauthorized` | (Optional) Set to `true` to bypass SSL certificate validation. Useful for internal/self-signed endpoints. Default: `false`. |
 | `timeout` | (Optional) Request timeout in milliseconds. Default: `120000` (2 minutes). |
 | `maxRetries` | (Optional) Maximum retry attempts for rate-limited/failed requests. Default: `3`. |
 
-## UI Features
+## UI Features (v2.23.0 On-Demand Modal)
 
-### Add Model Modal
+### Opening the Custom AI Models Modal
 
-Click the **"Add Model"** button in Settings → Models to open a polished modal with:
-- Provider dropdown (OpenAI, Anthropic, Google AI Studio, Ollama, OpenRouter, Custom)
-- Automatic URL pre-filling based on provider selection
-- Dynamic Google AI Studio URL generation as you type the model ID
-- Smooth enter/exit animations with backdrop blur
-- Form validation (required fields: Model ID, API Key, API URL)
-- Auto-generated display name if left blank
+To keep Antigravity's native interface completely unmodified (**Zero DOM Pollution**), v2.23.0 does not inject elements into Settings. Open the modal on demand via:
+
+- **Shortcut**: `Ctrl+Alt+M` (Windows/Linux) or `Cmd+Option+M` (macOS)
+- **System Tray**: Right-click tray icon → **⚙ Manage Custom Models (Ctrl+Alt+M)**
+- **App Menu**: **File → Manage Custom Models...**
+
+### Modal Capabilities
+
+- **Unified List & Add/Edit Card**: Smooth transitions between model list and add/edit form; close anytime with `Esc` or clicking outside.
+- **15 Provider Presets**: OpenAI, Anthropic, Google AI Studio, OpenRouter, DeepSeek, Groq, Mistral, Cerebras, Kimi (Moonshot), Fireworks AI, Ollama, LM Studio, llama.cpp, NVIDIA NIM, and Custom / Other.
+- **Auto-Filled Endpoints**: Selecting a provider pre-fills `apiUrl`, and typing a Google AI Studio model ID dynamically builds the `:generateContent` URL.
+- **Edit & Rename Models**: Click the edit (pencil) icon on any model to modify its URL, display name, or model ID; leave the API key blank to preserve the existing encrypted key.
+- **Live Search**: Automatically appears when more than 3 models are configured to filter by display name, model ID, or provider.
+- **Inline Delete Confirmation**: Click delete for an inline `Delete? [Yes] [No]` confirmation with instant optimistic removal (no blocking browser `confirm()` dialog).
+- **Test Connection**: Per-row check button (updates status dot green/red) and in-form **Test Connection** button.
+- **Key Recovery Banner ("Batch Fix OpenRouter")**: Automatically detects undecryptable keys (`keyValid === false`, e.g., after an Antigravity reinstallation) and offers one-click batch re-encryption for OpenRouter models.
 
 <p align="center">
   <img src="assets/add_custom_model_modal.png" alt="Add Custom AI Model Modal" width="45%">
   <img src="assets/add_custom_model_provider_dropdown.png" alt="API Provider Selection" width="45%">
 </p>
-
-### Custom Models Dashboard
-
-Below the MCP section in Settings → Models, a "Custom Models" section displays all your configured models with:
-- Model name and provider/URL details
-- **Test Connection** button with green ✅ / red ❌ status indicator
-- Hover effects on list items
-- Delete button with confirmation dialog
-- Empty state placeholder when no models are configured
-- Automatic refresh after add/delete operations
-- **Efficient DOM monitoring**: Uses `MutationObserver` with 200ms debounce instead of `setInterval(1000ms)`, dramatically reducing CPU overhead. The observer auto-disconnects after successful injection and re-attaches on SPA page transitions via URL change detection.
 
 <p align="center">
   <img src="assets/custom_models_dashboard.png" alt="Custom Models Dashboard" width="800">
@@ -673,9 +708,13 @@ Error: Cannot find module '...\googlecloudtools.datacloud_telemetry\"...\telemet
 ```
 **Cause:** The Data Cloud IDE extension automatically registers a pre-tool execution hook plugin with a nested quotes path bug on Windows.
 **Fix:**
-1. Delete the plugin directory:
-   - **Windows:** Delete `C:\Users\<User>\.gemini\config\plugins\googlecloudtools.datacloud_telemetry`
+1. Run `repatch-all.bat` / `deploy.ps1` (step `[6e]` automatically replaces the hook with a safe no-op stub if the directory exists), **or** delete `C:\Users\<User>\.gemini\config\plugins\googlecloudtools.datacloud_telemetry`.
 2. In Antigravity IDE / VS Code, open Extensions (`Ctrl+Shift+X`) and disable **Google Cloud Data Cloud** if telemetry is not required.
+
+### Encrypted API Key Needs Re-Encryption (`DECRYPTION_FAILED` / `Key Expired`)
+If Antigravity was reinstalled or Electron's `safeStorage` key changed, existing encrypted keys in `custom_models.json` may fail decryption:
+- Open the Custom AI Models modal (`Ctrl+Alt+M`) and use **Edit** on the affected model, or use the **Batch Fix OpenRouter** banner at the top of the modal.
+- Runtime requests to models with undecryptable keys fail cleanly with HTTP `400` and a clear prompt to update the key.
 
 ---
 
@@ -685,8 +724,9 @@ Error: Cannot find module '...\googlecloudtools.datacloud_telemetry\"...\telemet
 
 ```bash
 npm install          # Install dependencies
-npx tsc              # Compile TypeScript → dist/
-npx tsc --watch      # Watch mode for development
+npm run build        # Compile TypeScript → dist/
+npm test             # Run unit tests (vitest)
+npm run lint         # Run ESLint across src/**/*.ts
 ```
 
 ### Adding a New Provider
@@ -717,6 +757,21 @@ Set `DEBUG=antigravity:*` for verbose logging (debug level captures stream parse
 ---
 
 ## Changelog
+
+### v2.23.0 — Antigravity v2.23.0 & IDE v1.107.0 Compatibility, WSL 2 Support & On-Demand UI
+- **Compatibility**: Updated `package.json`, `languageServer.ts`, `preload.ts`, `ipcHandlers.ts`, `utils.ts`, and deploy scripts for **Antigravity v2.23.0** and **Antigravity IDE v1.107.0**.
+- **New (On-Demand Modal — Zero DOM Pollution)**: Replaced Settings DOM injection (`MutationObserver`) with a unified on-demand **Custom AI Models** modal opened via **`Ctrl+Alt+M`** (`Cmd+Option+M`), **File → Manage Custom Models...**, or **Tray → ⚙ Manage Custom Models**. Includes search, inline edit/rename with encrypted key preservation, inline delete confirmation, 15 provider presets, and **Batch Fix OpenRouter** key recovery.
+- **New (WSL 2 Integration)**: Added `src/wsl.ts` and `src/provisionSplash.ts` for Windows WSL 2 distro discovery, automatic Linux `language_server` provisioning with SHA-256 verification and splash progress UI, **Connect to WSL** / **Reopen Locally** menu & tray entries, Windows UNC/POSIX path translation, and `--wsl-distro` / `ANTIGRAVITY_WSL_DISTRO` / `ANTIGRAVITY_WSL_LS_PATH` support.
+- **Improved (Anthropic & Proxy)**: Added `normalizeSchemaForAnthropic()` for JSON Schema Draft 2020-12 tool parameter normalization, updated `anthropic-version` to `2023-06-01`, added `workspaceId` / `anthropicWorkspaceId` (`anthropic-workspace-id` header) support, expanded Claude 4.x/5.x capability detection, and added explicit HTTP 400 validation for undecryptable API keys.
+- **Improved (Desktop & Window UX)**: Added persistent window zoom (`zoomLevel`), native context menu IPC (`window:show-context-menu`), multi-folder workspace picker, `webUtils.getPathForFile`, clickable tray icon on Windows/Linux, and `antigravity-ide://` external scheme support.
+- **Improved (Auto Switch)**: Disabled automatic chat rerouting (`resolveAutoSwitchModel`) and injected Auto Switch DOM elements so manual model selection in the chat dropdown is always respected cleanly.
+- **Improved (Deploy Scripts)**: `deploy.ps1`, `deploy-antigravity.ps1`, and `deploy-ide.ps1` now preserve clean `app.asar.backup` files, merge `dist/` without wiping official files, retry locked file operations, write `{"type": "commonjs"}` in `out/mrmppro-proxy/package.json` for IDE ESM compatibility, and remove external hardcoded sync script paths.
+- **Verification**: Validated with `npm run build` and `npm test` (**189 tests passed across 9 test files**).
+
+### v2.9.1 — HostBridgeServer, Streaming Keepalive & Separate Repatch Scripts
+- **Compatibility (v2.9.1)**: Added ConnectRPC `HostBridgeServer` (`src/hostBridgeServer.ts`, `src/proto/host_bridge_pb.ts`) and `updater:get-state` handler to prevent language server crashes and unwanted window reloads.
+- **Proxy Stability**: Extended streaming request timeout to 15 minutes with data keepalive, reused active proxy instances, and avoided destructive window force-reloads on server restarts.
+- **Deploy Scripts**: Split Windows one-click scripts into `repatch-all.bat`, `repatch-antigravity.bat`, and `repatch-ide.bat` (backed by `deploy.ps1`, `deploy-antigravity.ps1`, and `deploy-ide.ps1`), plus automatic telemetry hook neutralization.
 
 ### v2.8.1 — Antigravity v2.8.1 Compatibility & IDE Model Injection Fix
 - **Fixed (Antigravity IDE)**: Resolved custom models not appearing in the Antigravity IDE chat dropdown. Directly injects computed model slugs and placeholder IDs into `agentModelSorts.groups[].modelIds` across all proxy response paths (main, timeout, parse fallback, network error).

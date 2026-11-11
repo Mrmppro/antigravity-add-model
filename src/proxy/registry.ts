@@ -33,6 +33,7 @@ export interface ProviderHeaders {
   Authorization?: string;
   'x-api-key'?: string;
   'anthropic-version'?: string;
+  'anthropic-workspace-id'?: string;
   'x-goog-api-key'?: string;
   'HTTP-Referer'?: string;
   'X-Title'?: string;
@@ -132,13 +133,24 @@ export function translateStreamChunk(provider: string, chunk: unknown, modelName
   return null;
 }
 
-export function getProviderHeaders(provider: string, apiKey: string): ProviderHeaders {
+export function getProviderHeaders(
+  provider: string,
+  apiKey: string,
+  extra?: { workspaceId?: string; anthropicWorkspaceId?: string }
+): ProviderHeaders {
   const headers: ProviderHeaders = { 'Content-Type': 'application/json' };
   if (!apiKey || apiKey === 'none') return headers;
 
   if (provider === 'anthropic' || ANTHROPIC_COMPAT.has(provider)) {
     headers['x-api-key'] = apiKey;
-    headers['anthropic-version'] = '2025-04-01';
+    headers['anthropic-version'] = '2023-06-01';
+    const wsId =
+      extra?.workspaceId ||
+      extra?.anthropicWorkspaceId ||
+      process.env.ANTHROPIC_WORKSPACE_ID;
+    if (wsId) {
+      headers['anthropic-workspace-id'] = wsId;
+    }
   } else if (provider === 'google') {
     headers['x-goog-api-key'] = apiKey;
   } else if (provider === 'openrouter') {

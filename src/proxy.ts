@@ -29,6 +29,8 @@ export interface CustomModel {
   _slug?: string;
   timeout?: number;
   maxRetries?: number;
+  workspaceId?: string;
+  anthropicWorkspaceId?: string;
 }
 
 interface GeminiRequestBody {
@@ -191,27 +193,11 @@ function isModelMatch(m: CustomModel, targetModel: string | undefined, targetId?
  * the caller's native request completely untouched.
  */
 function resolveAutoSwitchModel(
-  body: GeminiRequestBody,
-  nativeModel: string | undefined,
+  _body: GeminiRequestBody,
+  _nativeModel: string | undefined,
 ): { model: CustomModel; fallbacks: CustomModel[] } | undefined {
-  const decision = resolveChatAutoSwitchDecision(body);
-  if (!decision) return undefined;
-  logChatAutoDecision(nativeModel, decision);
-  if (decision.action !== 'route' || !decision.target) return undefined;
-
-  const customModels = loadCustomModels();
-  const model = findCustomModelForRoute(decision.target, customModels);
-  if (!model) {
-    // The route points at a model the user has since deleted or renamed.
-    log.warn(`[Auto Switch] Target "${decision.target.displayName}" is no longer available; using the selected model.`);
-    return undefined;
-  }
-
-  const fallbacks = resolveAutoSwitchFallbacks(body, decision.target.id)
-    .map((route) => findCustomModelForRoute(route, customModels))
-    .filter((candidate): candidate is CustomModel => candidate !== undefined);
-
-  return { model, fallbacks };
+  // Auto Switch completely disabled by user request
+  return undefined;
 }
 
 
@@ -570,8 +556,23 @@ function handleCustomModelRequest(
 
   const provider = model.provider === 'custom' || model.provider === 'openrouter' ? 'openai' : model.provider;
 
+  if (!model.apiKey || model.apiKey === 'DECRYPTION_FAILED' || model.apiKey.startsWith('enc:')) {
+    log.error(`[Proxy] Model ${model.displayName} has an invalid or un-decryptable API key.`);
+    if (handOverToFallback('invalid API key')) return;
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        error: {
+          code: 400,
+          message: `API key for model "${model.displayName}" could not be decrypted. Please update your API key in ~/.gemini/antigravity/custom_models.json.`,
+        },
+      }),
+    );
+    return;
+  }
+
   const payload = registry.translateRequest(provider, geminiBody, model.externalModelName);
-  const headers = registry.getProviderHeaders(provider, model.apiKey);
+  const headers = registry.getProviderHeaders(provider, model.apiKey, model);
 
   if (isStream && registry.supportsStreaming(provider)) {
     (payload as Record<string, unknown>).stream = true;

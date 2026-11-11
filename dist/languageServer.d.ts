@@ -15,11 +15,17 @@ export interface StartMonitorOptions {
     hostBridgeUrl?: string;
     hostBridgeToken?: string;
     onPortChanged?: (newPort: number) => void;
+    wsl?: {
+        distro: string;
+        binaryPath: string;
+    };
 }
 /**
  * Gets the build CL of the language server by running it with --stamp.
  */
 export declare function getLsCL(): Promise<string>;
+/** Returns the validated http(s) URL from an ANTIGRAVITY_OPEN_URL line, if any. */
+export declare function extractOpenUrl(line: string): string | null;
 /** Returns the active language server process, or null if not running. */
 export declare function getLsProcess(): ChildProcess | null;
 /** Returns the active language server port, or 0 if not running. */

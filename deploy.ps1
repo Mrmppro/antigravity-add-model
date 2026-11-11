@@ -3,8 +3,8 @@
 # Run this script from a PowerShell terminal!
 
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  Antigravity Safe Deploy Script" -ForegroundColor Yellow
-Write-Host "  MRMPPRO | Customization, MCP, Skills & Gravity Auto Switch" -ForegroundColor Magenta
+Write-Host "  Antigravity v2.23.0 Safe Deploy Script" -ForegroundColor Yellow
+Write-Host "  MRMPPRO | Customization, MCP, Skills, WSL & Gravity Auto Switch" -ForegroundColor Magenta
 Write-Host "============================================" -ForegroundColor Cyan
 
 # 1. Close Antigravity and Antigravity IDE
@@ -21,6 +21,9 @@ Write-Host "   OK" -ForegroundColor Green
 # 2. Define paths
 $ProjectDir = $PSScriptRoot
 $AsarPath = "$env:LOCALAPPDATA\Programs\antigravity\resources\app.asar"
+if (-not (Test-Path $AsarPath)) {
+    $AsarPath = "$env:LOCALAPPDATA\Programs\Antigravity\resources\app.asar"
+}
 $BackupAsar = "$AsarPath.backup"
 $TempDir = Join-Path $env:TEMP "antigravity_safe_deploy"
 
@@ -31,19 +34,19 @@ $BackupAsarUnpacked = "$BackupAsar.unpacked"
 if (Test-Path $AsarPath) {
     # Backup current app.asar if backup doesn't exist
     if (-not (Test-Path $BackupAsar)) {
-        Write-Host "[2/7] No backup found - backing up from current version..." -ForegroundColor Yellow
+        Write-Host "[2/7] Creating initial backup of app.asar..." -ForegroundColor Yellow
         Copy-Item $AsarPath $BackupAsar -Force
         Write-Host "   app.asar backed up successfully." -ForegroundColor Green
     } else {
-        Write-Host "[2/7] Backing up original app.asar..." -ForegroundColor Yellow
-        Copy-Item $AsarPath $BackupAsar -Force
+        Write-Host "[2/7] Preserving existing clean backup of app.asar..." -ForegroundColor Green
     }
 
     # Ensure app.asar.unpacked is backed up and synced
     if (Test-Path $AsarUnpacked) {
-        if (Test-Path $BackupAsarUnpacked) { Remove-Item $BackupAsarUnpacked -Recurse -Force }
-        Copy-Item $AsarUnpacked $BackupAsarUnpacked -Recurse -Force
-        Write-Host "   app.asar.unpacked backed up successfully." -ForegroundColor Green
+        if (-not (Test-Path $BackupAsarUnpacked)) {
+            Copy-Item $AsarUnpacked $BackupAsarUnpacked -Recurse -Force
+            Write-Host "   app.asar.unpacked backed up successfully." -ForegroundColor Green
+        }
     }
 } else {
     Write-Host "[2/7] ERROR: app.asar not found at: $AsarPath" -ForegroundColor Red
@@ -79,9 +82,11 @@ if (Test-Path (Join-Path $TempDir "scratch")) { Remove-Item (Join-Path $TempDir 
 $srcDist = Join-Path $ProjectDir "dist"
 $destDist = Join-Path $TempDir "dist"
 
-if (Test-Path $destDist) { Remove-Item $destDist -Recurse -Force }
-Copy-Item $srcDist $destDist -Recurse -Force
-Write-Host "   OK - dist folder copied. MRMPPRO customization patch ready." -ForegroundColor Green
+if (-not (Test-Path $destDist)) {
+    New-Item -ItemType Directory -Path $destDist -Force | Out-Null
+}
+Copy-Item -Path "$srcDist\*" -Destination $destDist -Recurse -Force
+Write-Host "   OK - dist folder merged without overwriting official files" -ForegroundColor Green
 
 # Copy repack.ps1 (latest version)
 $srcRepack = Join-Path $ProjectDir "repack.ps1"
@@ -93,9 +98,19 @@ if (Test-Path $srcRepack) {
 Write-Host "[5/7] Packing app.asar..." -ForegroundColor Yellow
 
 # Pack app.asar
-npx -y @electron/asar pack $TempDir $AsarPath
+$packed = $false
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    npx -y @electron/asar pack $TempDir $AsarPath
+    if ($LASTEXITCODE -eq 0) {
+        $packed = $true
+        break
+    }
+    Write-Host "   Packing attempt $attempt failed (file may still be locked), retrying in 2s..." -ForegroundColor Yellow
+    Get-Process -Name "Antigravity*", "language_server*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+}
 
-if ($LASTEXITCODE -ne 0) {
+if (-not $packed) {
     Write-Host "   ERROR: Packing failed! Restoring backup..." -ForegroundColor Red
     Copy-Item $BackupAsar $AsarPath -Force
     if (Test-Path $BackupAsarUnpacked) {
@@ -336,13 +351,6 @@ if (Test-Path $extJsPath) {
     Write-Host "   WARNING - extension.js not found at $extJsPath" -ForegroundColor Red
 }
 
-# 6d. Sync Models and MCP Config across Antigravity and Antigravity IDE
-$repatchScript = "d:\mrmp skills\gravity-skills\scripts\Repatch-AntigravityModels.ps1"
-if (Test-Path $repatchScript) {
-    Write-Host "[6d] Syncing Custom Models & MCP Config across targets..." -ForegroundColor Yellow
-    & $repatchScript -Force -Confirm:$false
-}
-
 # 6e. Neutralize telemetry hook path bug if plugin folder exists
 $telemetryDir = "$env:USERPROFILE\.gemini\config\plugins\googlecloudtools.datacloud_telemetry"
 if (Test-Path $telemetryDir) {
@@ -378,5 +386,5 @@ Write-Host "  Changes Applied:" -ForegroundColor Gray
 Write-Host "    - MRMPPRO Customization: Models, MCP, Skills & Gravity Auto Switch" -ForegroundColor Magenta
 Write-Host "    - Antigravity IDE: Standalone Proxy & Extension Router" -ForegroundColor Magenta
 Write-Host "    - Model placeholder IDs & Protobuf array/object normalization" -ForegroundColor Gray
-Write-Host "    - Antigravity 2.8.1 Compatibility Verified" -ForegroundColor Green
+Write-Host "    - Antigravity 2.23.0 & IDE 1.107.0 Compatibility Verified" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Cyan

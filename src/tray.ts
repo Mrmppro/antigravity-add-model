@@ -1,4 +1,4 @@
-import { app, Menu, MenuItemConstructorOptions, nativeImage, Tray } from 'electron';
+import { app, Menu, MenuItem, MenuItemConstructorOptions, nativeImage, Tray } from 'electron';
 import * as path from 'path';
 import { isMacOS } from './utils';
 
@@ -12,7 +12,7 @@ let contextMenu: Menu | null = null;
  * For macOS it uses a template image to automatically handle light/dark mode.
  * Other platforms use the normal app icon.
  */
-export function createTray(actions: MenuItemConstructorOptions[]): void {
+export function createTray(actions: MenuItemConstructorOptions[], onClick?: () => void): void {
   // On macOS use a template image (auto-inverts for dark/light menu bar).
   // Otherwise use a full-color icon since template images are unsupported
   // and a solid-black glyph can be invisible on dark panels.
@@ -24,6 +24,22 @@ export function createTray(actions: MenuItemConstructorOptions[]): void {
   tray = new Tray(icon);
   tray.setToolTip(app.getName());
   contextMenu = Menu.buildFromTemplate(actions);
+  tray.setContextMenu(contextMenu);
+  if (onClick && !isMacOS()) {
+    tray.on('click', onClick);
+  }
+}
+
+/**
+ * Inserts an item into the existing tray context menu at `position`.
+ * Used for items only known asynchronously (e.g. the WSL distro list).
+ */
+export function insertTrayMenuItem(position: number, options: MenuItemConstructorOptions): void {
+  if (!tray || !contextMenu) {
+    return;
+  }
+  contextMenu.insert(Math.min(position, contextMenu.items.length), new MenuItem(options));
+  // Re-set the menu so the tray picks up the change.
   tray.setContextMenu(contextMenu);
 }
 

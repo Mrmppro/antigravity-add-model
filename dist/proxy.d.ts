@@ -16,6 +16,8 @@ export interface CustomModel {
     _slug?: string;
     timeout?: number;
     maxRetries?: number;
+    workspaceId?: string;
+    anthropicWorkspaceId?: string;
 }
 export declare function startProxy(): Promise<number>;
 export declare function stopProxy(): Promise<void>;

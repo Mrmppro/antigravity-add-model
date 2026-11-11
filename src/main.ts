@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, session, Menu } from 'electron';
 import log from 'electron-log/main';
 import { registerIpcHandlers, scheduleAutoSwitchReverification } from './ipcHandlers';
 import * as fs from 'fs';
+import * as path from 'path';
 import * as crypto from 'crypto';
 import * as readline from 'readline';
 import { createWindow, showQuitConfirmation, setShowQuitConfirmation, showOrCreateWindow } from './utils';
@@ -17,13 +18,22 @@ import {
 import { initAutoUpdater, getHostUpdateStatus, applyHostUpdate } from './updater';
 import { startHostBridgeServer, HostBridgeServerHandle } from './hostBridgeServer';
 import { WINDOW_ORIGIN, DYNAMIC_PORT } from './constants';
-import { createTray } from './tray';
+import { createTray, insertTrayMenuItem } from './tray';
 import { StorageManager } from './storage';
 import { getAppStoragePath, getLsLogPath } from './paths';
-import { setupApplicationMenu } from './menu';
+import { setupApplicationMenu, wslConnectMenuTemplate, wslReopenLocallyTemplate } from './menu';
 import { registerCustomSchemes, registerCustomSchemeHandlers } from './customScheme';
 import { DEFAULTS, SettingsService, SettingKey } from './services/settingsService';
 import { maybeShowIdeInstallWizard } from './ideInstall';
+import { createProvisionSplash, ProvisionSplashHandle } from './provisionSplash';
+import {
+  readPersistedWslDistro,
+  persistWslDistro,
+  listWslDistros,
+  setActiveWslDistro,
+  ensureServerInstalled,
+  WSL_STATE_FILE,
+} from './wsl';
 
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -48,6 +58,34 @@ const HEADLESS = process.env.ELECTRON_OZONE_PLATFORM_HINT === 'headless';
 
 // When set, skip LS startup and load this URL directly (for dev iteration).
 const DEV_URL = process.env.DEV_URL;
+
+// WSL distro to provision and launch the LS in (Windows only, '' = local).
+// Precedence: --wsl-distro switch (empty value forces local) >
+// ANTIGRAVITY_WSL_DISTRO env var > distro persisted from the last session.
+function resolveStartupWslDistro(): string {
+  if (process.platform !== 'win32') {
+    return '';
+  }
+  if (app.commandLine.hasSwitch('wsl-distro')) {
+    return app.commandLine.getSwitchValue('wsl-distro');
+  }
+  return (
+    process.env.ANTIGRAVITY_WSL_DISTRO ||
+    readPersistedWslDistro(path.join(app.getPath('userData'), WSL_STATE_FILE))
+  );
+}
+
+let WSL_DISTRO = resolveStartupWslDistro();
+
+/** True if `distro` is currently registered in WSL (false on wsl.exe errors). */
+async function wslDistroExists(distro: string): Promise<boolean> {
+  try {
+    return (await listWslDistros()).some((d) => d.name === distro);
+  } catch (err) {
+    console.error('[WSL] Failed to list distros:', err);
+    return false;
+  }
+}
 
 if (HEADLESS) {
   app.commandLine.appendSwitch('ozone-platform', 'headless');
@@ -90,13 +128,8 @@ if (!app.isDefaultProtocolClient(PROTOCOL)) {
 }
 
 app.on('second-instance', (_event, commandLine: string[]) => {
-  const wins = BrowserWindow.getAllWindows();
-  if (wins.length > 0) {
-    if (wins[0].isMinimized()) {
-      wins[0].restore();
-    }
-    wins[0].show();
-    wins[0].focus();
+  if (!HEADLESS && hasStartedMainApplication) {
+    showOrCreateWindow(getLsPort(), storageManager);
     app.focus({ steal: true });
   }
   const url = commandLine.find((arg) => arg.startsWith(`${PROTOCOL}://`));
@@ -190,12 +223,12 @@ app
 
     if (DEV_URL) {
       console.log('Starting in dev mode with URL:', DEV_URL);
-      createWindow(DEV_URL);
+      createWindow(DEV_URL, storageManager);
       hasStartedMainApplication = true;
       return;
     }
 
-    if (!fs.existsSync(LS_BINARY)) {
+    if (!WSL_DISTRO && !fs.existsSync(LS_BINARY)) {
       const msg = `language_server binary not found at:\n${LS_BINARY}\n\nPlease build/set a valid location.`;
       if (HEADLESS) {
         console.error('ERROR:', msg);
@@ -206,10 +239,61 @@ app
       return;
     }
 
+    // In WSL mode, make sure the matching server version is installed in the
+    // distro before launching.
+    let wslOptions: { distro: string; binaryPath: string } | undefined;
+    if (WSL_DISTRO && !(await wslDistroExists(WSL_DISTRO))) {
+      // The distro was removed since the last session (e.g. `wsl
+      // --unregister`). Open locally instead of failing provisioning.
+      console.warn(`[WSL] Distro "${WSL_DISTRO}" is not installed; opening locally instead.`);
+      persistWslDistro(path.join(app.getPath('userData'), WSL_STATE_FILE), '');
+      if (!HEADLESS) {
+        void dialog.showMessageBox({
+          type: 'warning',
+          title: 'WSL distro not found',
+          message: `The WSL distro "${WSL_DISTRO}" is no longer installed.`,
+          detail: 'Antigravity opened on Windows instead.',
+        });
+      }
+      WSL_DISTRO = '';
+    }
+    if (WSL_DISTRO) {
+      setActiveWslDistro(WSL_DISTRO);
+      // Created lazily on the first status update, so it only appears when
+      // provisioning actually has work to do (first launch per version).
+      let splash: ProvisionSplashHandle | undefined;
+      try {
+        const binaryPath = await ensureServerInstalled(
+          WSL_DISTRO,
+          app.getVersion(),
+          app.getName().toLowerCase().includes('insiders'),
+          (status) => {
+            if (!HEADLESS) {
+              splash ??= createProvisionSplash(WSL_DISTRO);
+              splash.setStatus(status);
+            }
+          },
+        );
+        wslOptions = { distro: WSL_DISTRO, binaryPath };
+      } catch (err) {
+        const msg = `Failed to install the server into WSL distro "${WSL_DISTRO}":\n${(err as Error).message}`;
+        persistWslDistro(path.join(app.getPath('userData'), WSL_STATE_FILE), '');
+        if (HEADLESS) {
+          console.error('ERROR:', msg);
+        } else {
+          await dialog.showErrorBox('WSL setup failed', msg);
+        }
+        app.quit();
+        return;
+      } finally {
+        splash?.close();
+      }
+    }
+
     const csrf = crypto.randomUUID();
     console.log(`Starting app (v${app.getVersion()}) with dynamic port…`);
 
-    // Start host bridge server for 2.9.1 language server update queries
+    // Start host bridge server for language server update queries
     try {
       hostBridgeServer = await startHostBridgeServer({
         getUpdateStatus: getHostUpdateStatus,
@@ -225,6 +309,7 @@ app
     try {
       handle = await startAndMonitorLanguageServer(targetPort, csrf, {
         headless: HEADLESS,
+        wsl: wslOptions,
         hostBridgeUrl: hostBridgeServer?.url,
         hostBridgeToken: hostBridgeServer?.token,
         onPortChanged: (newPort: number) => {
@@ -272,35 +357,66 @@ app
     // Initial window — opened once after the LS has successfully started.
     if (!HEADLESS) {
       setupApplicationMenu(url);
-      const mainWindow = createWindow(url);
+      createWindow(url, storageManager);
       if (app.dock) {
         const dockMenu = Menu.buildFromTemplate([
           {
             label: 'New Window',
-            click: () => createWindow(url),
+            click: () => createWindow(url, storageManager),
           },
         ]);
         app.dock.setMenu(dockMenu);
       }
-      createTray([
-        {
-          id: 'running-agents',
-          label: 'No agents running',
-          enabled: false,
-        },
-        { type: 'separator' },
-        {
-          label: `Open ${app.getName()}`,
-          click: () => showOrCreateWindow(getLsPort()),
-        },
-        {
-          label: 'Quit',
-          click: () => {
-            // Triggers 'before-quit' to run graceful cleanup without confirmation.
-            app.quit();
+      createTray(
+        [
+          {
+            id: 'running-agents',
+            label: 'No agents running',
+            enabled: false,
           },
+          { type: 'separator' },
+          {
+            label: `Open ${app.getName()}`,
+            click: () => showOrCreateWindow(getLsPort(), storageManager),
+          },
+          {
+            label: '⚙ Manage Custom Models (Ctrl+Alt+M)',
+            click: () => {
+              const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+              if (win) {
+                win.show();
+                win.focus();
+                win.webContents.send('open-custom-models-modal');
+              } else {
+                showOrCreateWindow(getLsPort(), storageManager);
+              }
+            },
+          },
+          { type: 'separator' },
+          {
+            label: 'Quit',
+            click: () => {
+              // Triggers 'before-quit' to run graceful cleanup without confirmation.
+              app.quit();
+            },
+          },
+        ],
+        () => {
+          showOrCreateWindow(getLsPort(), storageManager);
+          app.focus({ steal: true });
         },
-      ]);
+      );
+      // The app menu bar isn't reachable on Windows (hidden title bar), so
+      // the tray menu also gets the "Connect to WSL" entry.
+      void wslConnectMenuTemplate().then((wslItem) => {
+        if (wslItem) {
+          insertTrayMenuItem(2, wslItem);
+          const reopen = wslReopenLocallyTemplate();
+          if (reopen) {
+            insertTrayMenuItem(3, reopen);
+          }
+        }
+      });
     }
 
     // Start checking for app updates.
@@ -404,6 +520,6 @@ app.on('activate', () => {
   // icon and no windows are open.
   if (!HEADLESS && BrowserWindow.getAllWindows().length === 0) {
     const url = DEV_URL ?? `${WINDOW_ORIGIN}:${getLsPort()}/`;
-    createWindow(url);
+    createWindow(url, storageManager);
   }
 });

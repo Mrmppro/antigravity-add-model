@@ -20,6 +20,7 @@ interface UpdaterAPI {
 }
 interface DialogAPI {
     showOpenDialog: () => Promise<string | undefined>;
+    showOpenMultipleFolderDialog: () => Promise<string[]>;
 }
 interface NotificationOptions {
     title: string;
@@ -37,7 +38,9 @@ interface StorageAPI {
     updateItems: (changes: Record<string, string | null>) => Promise<void>;
     onChanged: (callback: (changes: Record<string, string | null>) => void) => UnsubscribeFn;
     getCustomModels: () => Promise<CustomModelEntry[]>;
-    saveCustomModel: (model: CustomModelEntry) => Promise<{
+    saveCustomModel: (model: CustomModelEntry & {
+        originalModelName?: string;
+    }) => Promise<{
         success: boolean;
         error?: string;
     }>;
@@ -45,7 +48,14 @@ interface StorageAPI {
         success: boolean;
         error?: string;
     }>;
-    testModelConnection: (model: TestModelParams) => Promise<ConnectionTestResult>;
+    testModelConnection: (model: TestModelParams & {
+        name?: string;
+    }) => Promise<ConnectionTestResult>;
+    updateProviderKeys: (provider: string, apiKey: string) => Promise<{
+        success: boolean;
+        updatedCount?: number;
+        error?: string;
+    }>;
 }
 interface VerifyModelResult {
     ok: boolean;
@@ -81,8 +91,18 @@ interface TitleBarOverlayOptions {
     color: string;
     symbolColor: string;
 }
+interface ContextMenuItem {
+    id: string;
+    label?: string;
+    type?: 'normal' | 'separator' | 'submenu' | 'checkbox' | 'radio';
+    checked?: boolean;
+    disabled?: boolean;
+    accelerator?: string;
+    submenu?: ContextMenuItem[];
+}
 interface ElectronNativeAPI {
     getZoomLevel: () => number;
+    getPathForFile: (file: File) => string;
     setTitleBarOverlay: (options: TitleBarOverlayOptions) => Promise<void>;
     minimize: () => Promise<void>;
     maximize: () => Promise<void>;
@@ -95,9 +115,24 @@ interface ElectronNativeAPI {
     resetZoom: () => void;
     openExternal: (url: string) => Promise<void>;
     revealInFilePicker: (path: string) => Promise<void>;
+    showContextMenu: (items: ContextMenuItem[]) => Promise<string | null>;
+    closeContextMenu: () => Promise<void>;
 }
 interface IdeAPI {
     isInstalled: () => Promise<boolean>;
+}
+interface WslDistroInfo {
+    name: string;
+    isDefault: boolean;
+}
+interface WslState {
+    available: boolean;
+    activeDistro: string | null;
+    distros: WslDistroInfo[];
+}
+interface WslAPI {
+    getState: () => Promise<WslState>;
+    connect: (distro: string) => Promise<void>;
 }
 interface CustomModelEntry {
     name: string;
@@ -109,9 +144,12 @@ interface CustomModelEntry {
     externalModelName: string;
     allowUnauthorized?: boolean;
     encrypted?: boolean;
+    keyValid?: boolean;
+    originalModelName?: string;
     [key: string]: unknown;
 }
 interface TestModelParams {
+    name?: string;
     apiUrl: string;
     provider: string;
     apiKey?: string;
@@ -136,6 +174,7 @@ declare global {
         agent: AgentAPI;
         electronNative: ElectronNativeAPI;
         ide: IdeAPI;
+        wsl: WslAPI;
     }
 }
 export {};

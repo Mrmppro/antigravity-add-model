@@ -7,11 +7,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.detectModelCapabilities = detectModelCapabilities;
 exports.detectModelCapabilitiesByName = detectModelCapabilitiesByName;
 // ─── Detection ────────────────────────────────────────────────────────────
-const THINKING_PATTERN = /thinking|reasoning|reasoner|o1|o3|r1|opus-4|sonnet-4|claude-4|3-7|4-7|3\.7|4\.7/i;
+const THINKING_PATTERN = /thinking|reasoning|reasoner|o1|o3|r1|opus-[45]|sonnet-[45]|claude-[45]|3-7|4-7|5-5|3\.7|4\.7|5\.5/i;
 const DEEPSEEK_PATTERN = /deepseek/i;
 const CLAUDE_PATTERN = /claude|opus|sonnet/i;
-const CLAUDE_THINKING_PATTERN = /opus-4|sonnet-4|claude-4|claude-3-5|claude-3-7/i;
-const THINKING_MODEL_PATTERN = /opus-4|sonnet-4|claude-4/i;
+const CLAUDE_THINKING_PATTERN = /opus-[45]|sonnet-[45]|claude-[45]|claude-3-5|claude-3-7|claude-5/i;
+const THINKING_MODEL_PATTERN = /opus-[45]|sonnet-[45]|claude-[45]|claude-5/i;
 const IMAGE_SUPPORT_PATTERN = /gpt-4o|gpt-4-turbo|claude|gemini|vision|llava|qwenvl|pixtral|yi-vision|cogvlm|kimi|moonshot/i;
 const NO_IMAGE_PATTERN = /deepseek(?!.*vision)|llama(?!.*vision)|mixtral(?!.*vision)|mistral(?!.*pixtral)|codestral|qwen(?!.*vl)/i;
 /**

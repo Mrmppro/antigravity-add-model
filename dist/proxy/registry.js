@@ -139,13 +139,19 @@ function translateStreamChunk(provider, chunk, modelName) {
     }
     return null;
 }
-function getProviderHeaders(provider, apiKey) {
+function getProviderHeaders(provider, apiKey, extra) {
     const headers = { 'Content-Type': 'application/json' };
     if (!apiKey || apiKey === 'none')
         return headers;
     if (provider === 'anthropic' || ANTHROPIC_COMPAT.has(provider)) {
         headers['x-api-key'] = apiKey;
-        headers['anthropic-version'] = '2025-04-01';
+        headers['anthropic-version'] = '2023-06-01';
+        const wsId = extra?.workspaceId ||
+            extra?.anthropicWorkspaceId ||
+            process.env.ANTHROPIC_WORKSPACE_ID;
+        if (wsId) {
+            headers['anthropic-workspace-id'] = wsId;
+        }
     }
     else if (provider === 'google') {
         headers['x-goog-api-key'] = apiKey;

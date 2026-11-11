@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron';
+import { StorageManager } from './storage';
 export declare let showQuitConfirmation: boolean;
 export declare function setShowQuitConfirmation(value: boolean): void;
 export declare function isMacOS(): boolean;
@@ -7,11 +8,11 @@ export declare function isMacOS(): boolean;
  * Uses a hidden title bar with native traffic lights on macOS.
  * Node integration is disabled and context isolation is enabled for security.
  */
-export declare function createWindow(url: string): BrowserWindow;
+export declare function createWindow(url: string, storageManager?: StorageManager): BrowserWindow;
 /**
  * Focuses a window if it exists, or creates a new one.
  */
-export declare const showOrCreateWindow: (port: number) => void;
+export declare const showOrCreateWindow: (port: number, storageManager?: StorageManager) => void;
 /**
  * Manages the power save blocker to keep the computer awake.
  */

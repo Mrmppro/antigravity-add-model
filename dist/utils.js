@@ -46,6 +46,7 @@ const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
 const paths_1 = require("./paths");
 const loadingOverlay_1 = require("./loadingOverlay");
+const wsl_1 = require("./wsl");
 exports.showQuitConfirmation = false;
 function setShowQuitConfirmation(value) {
     exports.showQuitConfirmation = value;
@@ -98,16 +99,19 @@ function ensureAppIsInDock() {
  * Uses a hidden title bar with native traffic lights on macOS.
  * Node integration is disabled and context isolation is enabled for security.
  */
-function createWindow(url) {
+function createWindow(url, storageManager) {
     ensureAppIsInDock();
     const theme = getThemeMode().toUpperCase();
     const isLight = theme.includes('LIGHT');
     const backgroundColor = isLight ? '#FAFAFA' : '#131313';
     const foregroundColor = isLight ? '#383A42' : '#FAFAFA';
+    const wslBadge = (0, wsl_1.getActiveWslDistro)() ? ` (WSL: ${(0, wsl_1.getActiveWslDistro)()})` : '';
     const win = new electron_1.BrowserWindow({
         width: 1400,
         height: 900,
-        title: electron_1.app.getName(),
+        minWidth: 500,
+        minHeight: 400,
+        title: electron_1.app.getName() + wslBadge,
         icon: path.join(__dirname, '..', 'icon.png'),
         titleBarStyle: 'hidden',
         titleBarOverlay: isMacOS()
@@ -123,7 +127,18 @@ function createWindow(url) {
             nodeIntegration: false,
             contextIsolation: true,
             preload: path.join(__dirname, 'preload.js'),
+            devTools: !electron_1.app.isPackaged,
+            webviewTag: true,
         },
+    });
+    // Prevent the menu dropdown from being very wide due to long page titles
+    win.on('page-title-updated', (event, title) => {
+        const maxLength = 25;
+        const truncated = title.length > maxLength ? title.substring(0, maxLength) + '...' : title;
+        if (truncated !== title || wslBadge) {
+            event.preventDefault();
+            win.setTitle(truncated + wslBadge);
+        }
     });
     win.webContents.setWindowOpenHandler((details) => {
         void electron_1.shell.openExternal(details.url);
@@ -132,27 +147,61 @@ function createWindow(url) {
     (0, loadingOverlay_1.attachLoadingOverlay)(win, foregroundColor, backgroundColor);
     (0, keybindings_1.registerKeybindings)(win, {
         createNewWindow: () => {
-            void createWindow(url);
+            void createWindow(url, storageManager);
         },
         onQuitRequested: () => {
             exports.showQuitConfirmation = true;
             electron_1.app.quit();
         },
     });
+    // Zoom persistence — restore saved level and capture future changes.
+    if (storageManager) {
+        const ZOOM_LEVEL_KEY = 'zoomLevel';
+        let isRestoringZoom = false;
+        const applyStoredZoomLevel = async () => {
+            const items = await storageManager.getItems();
+            const stored = items[ZOOM_LEVEL_KEY];
+            if (stored !== undefined && stored !== null) {
+                const level = parseFloat(stored);
+                if (!isNaN(level)) {
+                    isRestoringZoom = true;
+                    win.webContents.setZoomLevel(level);
+                    isRestoringZoom = false;
+                }
+            }
+        };
+        win.webContents.on('did-finish-load', () => {
+            void applyStoredZoomLevel();
+        });
+        // Capture zoom changes from native menu accelerators, trackpad
+        // pinch-to-zoom, or Ctrl+scroll so they are also persisted.
+        win.webContents.on('zoom-changed', (_event, _direction) => {
+            if (isRestoringZoom) {
+                return;
+            }
+            const currentLevel = win.webContents.getZoomLevel();
+            void storageManager.updateItems({
+                [ZOOM_LEVEL_KEY]: String(currentLevel),
+            });
+        });
+    }
     void win.loadURL(url);
     return win;
 }
 /**
  * Focuses a window if it exists, or creates a new one.
  */
-const showOrCreateWindow = (port) => {
+const showOrCreateWindow = (port, storageManager) => {
     const wins = electron_1.BrowserWindow.getAllWindows();
     if (wins.length > 0) {
+        if (wins[0].isMinimized()) {
+            wins[0].restore();
+        }
         wins[0].show();
         wins[0].focus();
     }
     else {
-        createWindow(`${constants_1.WINDOW_ORIGIN}:${port}/`);
+        createWindow(`${constants_1.WINDOW_ORIGIN}:${port}/`, storageManager);
     }
 };
 exports.showOrCreateWindow = showOrCreateWindow;

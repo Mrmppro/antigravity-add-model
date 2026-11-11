@@ -45,29 +45,107 @@ const updater_1 = require("./updater");
 const main_1 = __importDefault(require("electron-log/main"));
 const fs = __importStar(require("fs/promises"));
 const path = __importStar(require("path"));
+const url_1 = require("url");
 const customScheme_1 = require("./customScheme");
 const tray_1 = require("./tray");
 const config_1 = require("./autoSwitch/config");
 const verifier_1 = require("./autoSwitch/verifier");
+const constants_1 = require("./ideInstall/constants");
+const wsl_1 = require("./wsl");
+const menu_1 = require("./menu");
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const cryptoStore = require('./cryptoStore');
+function buildContextMenuTemplate(items, onSelect) {
+    return items.map((item) => {
+        if (item.type === 'separator') {
+            return { type: 'separator' };
+        }
+        if (item.type === 'submenu' || (item.submenu && item.submenu.length > 0)) {
+            return {
+                id: item.id,
+                label: item.label ?? '',
+                type: 'submenu',
+                enabled: !item.disabled,
+                submenu: buildContextMenuTemplate(item.submenu ?? [], onSelect),
+            };
+        }
+        return {
+            id: item.id,
+            label: item.label ?? '',
+            type: item.type ?? 'normal',
+            checked: item.checked,
+            enabled: !item.disabled,
+            accelerator: item.accelerator,
+            click: () => {
+                onSelect(item.id);
+            },
+        };
+    });
+}
 /**
  * Registers all IPC handlers for the main process.
  */
 function registerIpcHandlers(storageManager) {
-    // IDE detection — the renderer polls this to decide whether to show IDE
-    // integration features.  Returning true because Antigravity itself is the IDE.
-    electron_1.ipcMain.handle('ide:is-installed', async () => true);
     // Dialog
+    // In WSL mode, start the folder dialog in the distro's home directory.
+    async function dialogDefaultPath() {
+        const distro = (0, wsl_1.getActiveWslDistro)();
+        if (!distro) {
+            return undefined;
+        }
+        try {
+            return (0, wsl_1.distroToWindowsPath)(await (0, wsl_1.getDistroHome)(distro), distro);
+        }
+        catch {
+            return undefined;
+        }
+    }
+    // In WSL mode, translate a picked Windows path to the distro's view.
+    // Returns undefined when the path is unusable (e.g. another distro).
+    function mapPickedPath(picked) {
+        const distro = (0, wsl_1.getActiveWslDistro)();
+        if (!distro) {
+            return picked;
+        }
+        const t = (0, wsl_1.windowsToDistroPath)(picked, distro);
+        if (t.error) {
+            electron_1.dialog.showErrorBox('Cannot open folder', t.error);
+            return undefined;
+        }
+        if (t.warning) {
+            void electron_1.dialog.showMessageBox({
+                type: 'warning',
+                message: 'Folder is on the Windows filesystem',
+                detail: t.warning,
+            });
+        }
+        return t.path;
+    }
     electron_1.ipcMain.handle('dialog:open-workspace', async () => {
         const result = await electron_1.dialog.showOpenDialog({
             properties: ['openDirectory', 'createDirectory'],
             title: 'Open workspace',
+            defaultPath: await dialogDefaultPath(),
         });
         if (result.canceled || result.filePaths.length === 0) {
             return undefined;
         }
-        return result.filePaths[0];
+        return mapPickedPath(result.filePaths[0]);
+    });
+    // Like 'dialog:open-workspace' but allows selecting multiple folders,
+    // returning an array of paths (empty if cancelled).
+    electron_1.ipcMain.handle('dialog:open-workspaces', async () => {
+        const result = await electron_1.dialog.showOpenDialog({
+            properties: ['openDirectory', 'createDirectory', 'multiSelections'],
+            title: 'Open workspaces',
+            defaultPath: await dialogDefaultPath(),
+        });
+        if (result.canceled || result.filePaths.length === 0) {
+            return [];
+        }
+        return result.filePaths
+            .map(mapPickedPath)
+            .filter((p) => p !== undefined);
     });
     // Auto-updater
     electron_1.ipcMain.handle('updater:apply', async () => {
@@ -148,12 +226,17 @@ function registerIpcHandlers(storageManager) {
             const content = await fs.readFile(filePath, 'utf-8');
             const parsed = JSON.parse(content);
             const models = parsed.models || [];
-            // Return models with masked API keys to the UI
+            // Return models with masked API keys and keyValid flag to UI
             return models.map((m) => {
                 let maskedKey = m.apiKey;
+                let keyValid = true;
                 if (m.apiKey && m.apiKey !== 'none') {
                     const decrypted = cryptoStore.decryptString(m.apiKey);
-                    if (decrypted.length <= 8) {
+                    if (!decrypted || decrypted === 'DECRYPTION_FAILED' || decrypted.startsWith('DECRYPTION_FAILED')) {
+                        keyValid = false;
+                        maskedKey = 'Key needs update';
+                    }
+                    else if (decrypted.length <= 8) {
                         maskedKey = '********';
                     }
                     else {
@@ -163,6 +246,7 @@ function registerIpcHandlers(storageManager) {
                 return {
                     ...m,
                     apiKey: maskedKey,
+                    keyValid,
                 };
             });
         }
@@ -183,14 +267,33 @@ function registerIpcHandlers(storageManager) {
             catch {
                 // Ignore if file doesn't exist
             }
-            // Check if model already exists, if so update it, otherwise push
+            // Sanitize model identifier (clean leading models/ prefix)
+            const rawId = (newModel.externalModelName || newModel.name || '').trim();
+            const cleanId = rawId.replace(/^models\//, '').trim();
+            newModel.name = 'models/' + cleanId;
+            newModel.externalModelName = cleanId;
+            // Auto-fill friendly display name if empty
+            if (!newModel.displayName || !newModel.displayName.trim()) {
+                newModel.displayName = cleanId;
+            }
+            // Handle rename if originalModelName is provided and different from newModel.name
+            const originalIdx = newModel.originalModelName && newModel.originalModelName !== newModel.name
+                ? models.findIndex((m) => m.name === newModel.originalModelName || m.name === 'models/' + newModel.originalModelName.replace(/^models\//, ''))
+                : -1;
+            // Check if model already exists under target name
             const existingIdx = models.findIndex((m) => m.name === newModel.name);
-            // Edit collision protection: If new key is masked and old record exists, preserve old encrypted key
-            const isMasked = newModel.apiKey &&
-                (newModel.apiKey.includes('...') || newModel.apiKey.startsWith('***') || newModel.apiKey === '********');
-            if (isMasked && existingIdx !== -1) {
-                newModel.apiKey = models[existingIdx].apiKey;
-                newModel.encrypted = models[existingIdx].encrypted;
+            const targetOld = originalIdx !== -1 ? models[originalIdx] : existingIdx !== -1 ? models[existingIdx] : undefined;
+            // Edit collision protection: If new key is masked/empty and old record exists, preserve old encrypted key
+            const isMaskedOrEmpty = !newModel.apiKey ||
+                newModel.apiKey === 'none' ||
+                newModel.apiKey.includes('...') ||
+                newModel.apiKey.startsWith('***') ||
+                newModel.apiKey.includes('••') ||
+                newModel.apiKey === '********' ||
+                newModel.apiKey === 'Key needs update';
+            if (isMaskedOrEmpty && targetOld && targetOld.apiKey && targetOld.apiKey !== 'none') {
+                newModel.apiKey = targetOld.apiKey;
+                newModel.encrypted = targetOld.encrypted;
             }
             else {
                 if (newModel.apiKey && newModel.apiKey !== 'none') {
@@ -198,8 +301,15 @@ function registerIpcHandlers(storageManager) {
                     newModel.encrypted = true;
                 }
             }
-            if (existingIdx !== -1) {
-                models[existingIdx] = newModel;
+            // Clean up original entry if renamed
+            if (originalIdx !== -1) {
+                models.splice(originalIdx, 1);
+            }
+            // Clean up helper property
+            delete newModel.originalModelName;
+            const updatedIdx = models.findIndex((m) => m.name === newModel.name);
+            if (updatedIdx !== -1) {
+                models[updatedIdx] = newModel;
             }
             else {
                 models.push(newModel);
@@ -226,13 +336,40 @@ function registerIpcHandlers(storageManager) {
             catch {
                 // Ignore if file doesn't exist
             }
-            models = models.filter((m) => m.name !== modelName);
+            const cleanTarget = modelName.replace(/^models\//, '').trim();
+            models = models.filter((m) => {
+                const mClean = (m.name || '').replace(/^models\//, '').trim();
+                return mClean !== cleanTarget && m.name !== modelName;
+            });
             await fs.mkdir(path.dirname(filePath), { recursive: true });
             await fs.writeFile(filePath, JSON.stringify({ models }, null, 2), 'utf-8');
             return { success: true };
         }
         catch (err) {
             console.error('[IPC] Failed to delete custom model:', err);
+            return { success: false, error: err.message };
+        }
+    });
+    electron_1.ipcMain.handle('storage:update-provider-keys', async (_event, provider, newApiKey) => {
+        const geminiDir = path.join(electron_1.app.getPath('home'), '.gemini', 'antigravity');
+        const filePath = path.join(geminiDir, 'custom_models.json');
+        try {
+            const content = await fs.readFile(filePath, 'utf-8');
+            const parsed = JSON.parse(content);
+            const models = parsed.models || [];
+            const encryptedKey = cryptoStore.encryptString(newApiKey.trim());
+            let updatedCount = 0;
+            for (const m of models) {
+                if (m.provider === provider || (provider === 'openrouter' && (m.apiUrl?.includes('openrouter') || m.provider === 'openrouter'))) {
+                    m.apiKey = encryptedKey;
+                    m.encrypted = true;
+                    updatedCount++;
+                }
+            }
+            await fs.writeFile(filePath, JSON.stringify({ models }, null, 2), 'utf-8');
+            return { success: true, updatedCount };
+        }
+        catch (err) {
             return { success: false, error: err.message };
         }
     });
@@ -320,19 +457,49 @@ function registerIpcHandlers(storageManager) {
                     rejectUnauthorized: !model.allowUnauthorized,
                 };
                 // Add auth header
-                if (model.apiKey && model.apiKey !== 'none') {
-                    let key = model.apiKey;
+                let key = model.apiKey;
+                const isMaskedOrEmpty = !key ||
+                    key === 'none' ||
+                    key.includes('...') ||
+                    key.startsWith('***') ||
+                    key.includes('••') ||
+                    key === '********';
+                if (isMaskedOrEmpty && model.name) {
                     try {
-                        key = cryptoStore.decryptString(model.apiKey);
+                        const geminiDir = path.join(electron_1.app.getPath('home'), '.gemini', 'antigravity');
+                        const filePath = path.join(geminiDir, 'custom_models.json');
+                        // eslint-disable-next-line @typescript-eslint/no-var-requires
+                        const content = require('fs').readFileSync(filePath, 'utf-8');
+                        const parsed = JSON.parse(content);
+                        const found = parsed.models?.find((m) => m.name === model.name);
+                        if (found?.apiKey && found.apiKey !== 'none') {
+                            key = cryptoStore.decryptString(found.apiKey) || found.apiKey;
+                        }
+                    }
+                    catch {
+                        /* key lookup fallback */
+                    }
+                }
+                else if (key && key !== 'none') {
+                    try {
+                        key = cryptoStore.decryptString(key);
                     }
                     catch {
                         /* key might not be encrypted */
                     }
+                }
+                if (key && key !== 'none' && !key.includes('...')) {
                     if (model.provider === 'anthropic') {
                         options.headers = {
                             'x-api-key': key,
-                            'anthropic-version': '2025-04-01',
+                            'anthropic-version': '2023-06-01',
                         };
+                        const wsId = model.workspaceId ||
+                            model.anthropicWorkspaceId ||
+                            process.env.ANTHROPIC_WORKSPACE_ID;
+                        if (wsId) {
+                            options.headers['anthropic-workspace-id'] = wsId;
+                        }
                     }
                     else if (model.provider === 'google') {
                         options.headers = {
@@ -346,19 +513,41 @@ function registerIpcHandlers(storageManager) {
                     }
                 }
                 const req = client.request(options, (res) => {
-                    // Any response (even 401/403) means the endpoint is reachable
-                    if (res.statusCode >= 200 && res.statusCode < 500) {
+                    const code = res.statusCode || 0;
+                    if (code === 401) {
+                        resolve({
+                            success: false,
+                            status: code,
+                            error: 'Invalid API Key (HTTP 401 Unauthorized)',
+                        });
+                    }
+                    else if (code === 403) {
+                        resolve({
+                            success: false,
+                            status: code,
+                            error: 'Access Forbidden (HTTP 403 Forbidden)',
+                        });
+                    }
+                    else if (code >= 200 && code < 400) {
                         resolve({
                             success: true,
-                            status: res.statusCode,
-                            message: `Endpoint reachable (HTTP ${res.statusCode})`,
+                            status: code,
+                            message: `Connected & Authenticated (HTTP ${code}) ✓`,
+                        });
+                    }
+                    else if (code === 405) {
+                        // Method Not Allowed on chat completions endpoint (normal for HEAD/GET on POST-only endpoints)
+                        resolve({
+                            success: true,
+                            status: code,
+                            message: `Endpoint reachable (HTTP 405) ✓`,
                         });
                     }
                     else {
                         resolve({
                             success: false,
-                            status: res.statusCode,
-                            error: `Server returned HTTP ${res.statusCode}`,
+                            status: code,
+                            error: `Server returned HTTP ${code}`,
                         });
                     }
                     res.resume(); // consume response to free memory
@@ -454,15 +643,129 @@ function registerIpcHandlers(storageManager) {
             win.webContents.toggleDevTools();
         }
     });
+    let activeContextMenu = null;
+    electron_1.ipcMain.handle('window:show-context-menu', async (_event, items) => {
+        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
+        if (!win || !Array.isArray(items) || items.length === 0) {
+            return null;
+        }
+        activeContextMenu?.closePopup?.(win);
+        return new Promise((resolve) => {
+            let settled = false;
+            const template = buildContextMenuTemplate(items, (id) => {
+                if (!settled) {
+                    settled = true;
+                    activeContextMenu = null;
+                    resolve(id);
+                }
+            });
+            const menu = electron_1.Menu.buildFromTemplate(template);
+            activeContextMenu = menu;
+            menu.popup({
+                window: win,
+                callback: () => {
+                    setImmediate(() => {
+                        if (activeContextMenu === menu) {
+                            activeContextMenu = null;
+                        }
+                        if (!settled) {
+                            settled = true;
+                            resolve(null);
+                        }
+                    });
+                },
+            });
+        });
+    });
+    electron_1.ipcMain.handle('window:close-context-menu', () => {
+        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
+        activeContextMenu?.closePopup?.(win);
+        activeContextMenu = null;
+    });
+    // Zoom — main-process source of truth so the level is reliably persisted
+    // across restarts on all platforms (works around a Chromium quirk on Windows
+    // where renderer-only webFrame.setZoomLevel changes aren't cached).
+    const ZOOM_LEVEL_KEY = 'zoomLevel';
+    const ZOOM_STEP = 0.5;
+    electron_1.ipcMain.handle('window:zoom-in', async () => {
+        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
+        if (win) {
+            const newLevel = win.webContents.getZoomLevel() + ZOOM_STEP;
+            win.webContents.setZoomLevel(newLevel);
+            await storageManager.updateItems({
+                [ZOOM_LEVEL_KEY]: String(newLevel),
+            });
+        }
+    });
+    electron_1.ipcMain.handle('window:zoom-out', async () => {
+        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
+        if (win) {
+            const newLevel = win.webContents.getZoomLevel() - ZOOM_STEP;
+            win.webContents.setZoomLevel(newLevel);
+            await storageManager.updateItems({
+                [ZOOM_LEVEL_KEY]: String(newLevel),
+            });
+        }
+    });
+    electron_1.ipcMain.handle('window:reset-zoom', async () => {
+        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
+        if (win) {
+            win.webContents.setZoomLevel(0);
+            await storageManager.updateItems({ [ZOOM_LEVEL_KEY]: String(0) });
+        }
+    });
     // Auto-updater manual check
     electron_1.ipcMain.handle('updater:check-for-updates', () => {
         (0, updater_1.checkForUpdates)(true);
     });
     // Safe external shell launch
     electron_1.ipcMain.handle('shell:open-external', async (_event, url) => {
-        if (url.startsWith('https://') || url.startsWith('http://')) {
+        if (url.startsWith('https://') || url.startsWith('http://') || url.startsWith('antigravity-ide://')) {
             await electron_1.shell.openExternal(url);
         }
+    });
+    electron_1.ipcMain.handle('shell:reveal-in-file-picker', (_event, filePath) => {
+        const distro = (0, wsl_1.getActiveWslDistro)();
+        if (distro) {
+            const posixPath = (0, url_1.fileURLToPath)(filePath, { windows: false });
+            electron_1.shell.showItemInFolder((0, wsl_1.distroToWindowsPath)(posixPath, distro));
+            return;
+        }
+        electron_1.shell.showItemInFolder((0, url_1.fileURLToPath)(filePath));
+    });
+    // IDE installation check
+    electron_1.ipcMain.handle('ide:is-installed', async () => {
+        try {
+            // Check standard installation path (works even if the app has never been launched).
+            await fs.stat((0, constants_1.getIdeInstallPath)());
+            return true;
+        }
+        catch {
+            return false;
+        }
+    });
+    // WSL environment switching (Windows only). Lets the web UI (e.g. the
+    // Settings page) discover WSL distros and relaunch the app into/out of one.
+    electron_1.ipcMain.handle('wsl:get-state', async () => {
+        if (!(0, wsl_1.isWslAvailable)()) {
+            return { available: false, activeDistro: null, distros: [] };
+        }
+        try {
+            const distros = await (0, wsl_1.listWslDistros)();
+            return {
+                available: true,
+                activeDistro: (0, wsl_1.getActiveWslDistro)() || null,
+                distros: distros.map((d) => ({ name: d.name, isDefault: d.isDefault })),
+            };
+        }
+        catch (err) {
+            main_1.default.error('wsl:get-state failed:', err);
+            return { available: false, activeDistro: null, distros: [] };
+        }
+    });
+    // Relaunches into the given distro, or locally when `distro` is empty.
+    electron_1.ipcMain.handle('wsl:connect', (_event, distro) => {
+        (0, menu_1.relaunchWithWslDistro)(distro || '');
     });
 }
 function getCustomModelsPath() {

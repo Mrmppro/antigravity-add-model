@@ -107,9 +107,10 @@ interface GeminiUsageMetadata {
     candidatesTokenCount: number;
     totalTokenCount: number;
 }
+declare function normalizeSchemaForAnthropic(raw: unknown): Record<string, unknown>;
 declare function mapGeminiToolsToAnthropic(geminiTools: GeminiTool[]): AnthropicTool[];
 export declare function mapGeminiToAnthropic(geminiBody: GeminiRequestBody, modelName: string): AnthropicRequestBody;
 export declare function mapAnthropicToGemini(anthRes: AnthropicResponse, modelName: string): GeminiGenerateContentResponse;
 export declare function mapAnthropicChunkToGemini(chunk: AnthropicResponse, modelName: string): GeminiCandidate | null;
-export { mapGeminiToolsToAnthropic };
+export { mapGeminiToolsToAnthropic, normalizeSchemaForAnthropic };
 //# sourceMappingURL=anthropic.d.ts.map

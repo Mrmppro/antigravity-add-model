@@ -148,25 +148,124 @@ interface GeminiUsageMetadata {
 
 // ─── REQUEST: Gemini → Anthropic ──────────────────────────────────────────
 
+function cleanPropertySchema(raw: Record<string, unknown>): Record<string, unknown> {
+  const schema: Record<string, unknown> = {};
+
+  if (typeof raw.description === 'string' && raw.description) {
+    schema.description = raw.description;
+  }
+  if (typeof raw.title === 'string' && raw.title) {
+    schema.title = raw.title;
+  }
+  if (Array.isArray(raw.enum) && raw.enum.length > 0) {
+    schema.enum = raw.enum;
+  }
+  if (raw.default !== undefined && raw.default !== null) {
+    schema.default = raw.default;
+  }
+  if (typeof raw.minimum === 'number') schema.minimum = raw.minimum;
+  if (typeof raw.maximum === 'number') schema.maximum = raw.maximum;
+  if (typeof raw.minLength === 'number') schema.minLength = raw.minLength;
+  if (typeof raw.maxLength === 'number') schema.maxLength = raw.maxLength;
+  if (typeof raw.pattern === 'string' && raw.pattern) schema.pattern = raw.pattern;
+
+  // Type determination
+  if (Array.isArray(raw.type)) {
+    schema.type = raw.type.map((t) => String(t).toLowerCase());
+  } else {
+    const rawType = typeof raw.type === 'string' ? raw.type.toLowerCase() : undefined;
+
+    if (rawType === 'int' || rawType === 'integer') {
+      schema.type = 'integer';
+    } else if (rawType === 'number' || rawType === 'float' || rawType === 'double') {
+      schema.type = 'number';
+    } else if (rawType === 'boolean' || rawType === 'bool') {
+      schema.type = 'boolean';
+    } else if (rawType === 'array') {
+      schema.type = 'array';
+      if (raw.items && typeof raw.items === 'object' && !Array.isArray(raw.items)) {
+        schema.items = cleanPropertySchema(raw.items as Record<string, unknown>);
+      } else {
+        schema.items = { type: 'string' };
+      }
+    } else if (rawType === 'object' || raw.properties) {
+      schema.type = 'object';
+      const subProps: Record<string, unknown> = {};
+      if (raw.properties && typeof raw.properties === 'object' && !Array.isArray(raw.properties)) {
+        for (const [k, v] of Object.entries(raw.properties as Record<string, unknown>)) {
+          if (v && typeof v === 'object' && !Array.isArray(v)) {
+            subProps[k] = cleanPropertySchema(v as Record<string, unknown>);
+          } else {
+            subProps[k] = { type: 'string' };
+          }
+        }
+      }
+      schema.properties = subProps;
+      if (Array.isArray(raw.required)) {
+        const validSubReq = (raw.required as unknown[])
+          .filter((r): r is string => typeof r === 'string' && Object.prototype.hasOwnProperty.call(subProps, r));
+        if (validSubReq.length > 0) {
+          schema.required = validSubReq;
+        }
+      }
+    } else {
+      schema.type = 'string';
+    }
+  }
+
+  return schema;
+}
+
+function normalizeSchemaForAnthropic(raw: unknown): Record<string, unknown> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { type: 'object', properties: {} };
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const result: Record<string, unknown> = {
+    type: 'object',
+  };
+
+  if (typeof obj.description === 'string' && obj.description) {
+    result.description = obj.description;
+  }
+
+  const properties: Record<string, unknown> = {};
+  const rawProps =
+    obj.properties && typeof obj.properties === 'object' && !Array.isArray(obj.properties)
+      ? (obj.properties as Record<string, unknown>)
+      : {};
+
+  for (const [propName, propVal] of Object.entries(rawProps)) {
+    if (propVal && typeof propVal === 'object' && !Array.isArray(propVal)) {
+      properties[propName] = cleanPropertySchema(propVal as Record<string, unknown>);
+    } else {
+      properties[propName] = { type: 'string' };
+    }
+  }
+  result.properties = properties;
+
+  if (Array.isArray(obj.required)) {
+    const validRequired = (obj.required as unknown[])
+      .filter((r): r is string => typeof r === 'string' && Object.prototype.hasOwnProperty.call(properties, r));
+    if (validRequired.length > 0) {
+      result.required = validRequired;
+    }
+  }
+
+  return result;
+}
+
 function mapGeminiToolsToAnthropic(geminiTools: GeminiTool[]): AnthropicTool[] {
   if (!geminiTools || !Array.isArray(geminiTools)) return [];
   const anthropicTools: AnthropicTool[] = [];
   for (const toolGroup of geminiTools) {
     if (toolGroup.functionDeclarations && Array.isArray(toolGroup.functionDeclarations)) {
       for (const func of toolGroup.functionDeclarations) {
-        const params = func.parameters
-          ? (JSON.parse(JSON.stringify(func.parameters)) as Record<string, unknown>)
-          : { type: 'OBJECT', properties: {} };
-        if (params.type && typeof params.type === 'string') {
-          (params as Record<string, string>).type = (params.type as string).toLowerCase();
-        }
-        if (params.properties) {
-          fixParamTypes(params.properties as Record<string, unknown>);
-        }
         anthropicTools.push({
           name: func.name,
-          description: func.description || '',
-          input_schema: params,
+          description: func.description || func.name,
+          input_schema: normalizeSchemaForAnthropic(func.parameters),
         });
       }
     }
@@ -426,4 +525,4 @@ export function mapAnthropicChunkToGemini(chunk: AnthropicResponse, modelName: s
   return null;
 }
 
-export { mapGeminiToolsToAnthropic };
+export { mapGeminiToolsToAnthropic, normalizeSchemaForAnthropic };

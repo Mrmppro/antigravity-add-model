@@ -1,37 +1,137 @@
-import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { broadcastState, checkForUpdates, getLastState } from './updater';
 import log from 'electron-log/main';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { extensionAuthorities } from './customScheme';
 import { updateTrayAgentCount } from './tray';
 import { StorageManager } from './storage';
 import { getAutoSwitchConfigPath, loadAutoSwitchPolicy, saveAutoSwitchPolicy } from './autoSwitch/config';
 import { AutoSwitchPolicy, AutoSwitchRoute } from './autoSwitch/types';
 import { VerifiableModel, verifyModel } from './autoSwitch/verifier';
+import { getIdeInstallPath } from './ideInstall/constants';
+import {
+  distroToWindowsPath,
+  getActiveWslDistro,
+  getDistroHome,
+  isWslAvailable,
+  listWslDistros,
+  windowsToDistroPath,
+} from './wsl';
+import { relaunchWithWslDistro } from './menu';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const cryptoStore = require('./cryptoStore');
+
+interface ContextMenuItemParam {
+  id: string;
+  label?: string;
+  type?: 'normal' | 'separator' | 'submenu' | 'checkbox' | 'radio';
+  checked?: boolean;
+  disabled?: boolean;
+  accelerator?: string;
+  submenu?: ContextMenuItemParam[];
+}
+
+function buildContextMenuTemplate(
+  items: ContextMenuItemParam[],
+  onSelect: (id: string) => void,
+): Electron.MenuItemConstructorOptions[] {
+  return items.map((item) => {
+    if (item.type === 'separator') {
+      return { type: 'separator' };
+    }
+    if (item.type === 'submenu' || (item.submenu && item.submenu.length > 0)) {
+      return {
+        id: item.id,
+        label: item.label ?? '',
+        type: 'submenu',
+        enabled: !item.disabled,
+        submenu: buildContextMenuTemplate(item.submenu ?? [], onSelect),
+      };
+    }
+    return {
+      id: item.id,
+      label: item.label ?? '',
+      type: item.type ?? 'normal',
+      checked: item.checked,
+      enabled: !item.disabled,
+      accelerator: item.accelerator,
+      click: () => {
+        onSelect(item.id);
+      },
+    };
+  });
+}
 
 /**
  * Registers all IPC handlers for the main process.
  */
 export function registerIpcHandlers(storageManager: StorageManager): void {
-  // IDE detection — the renderer polls this to decide whether to show IDE
-  // integration features.  Returning true because Antigravity itself is the IDE.
-  ipcMain.handle('ide:is-installed', async () => true);
-
   // Dialog
+  // In WSL mode, start the folder dialog in the distro's home directory.
+  async function dialogDefaultPath(): Promise<string | undefined> {
+    const distro = getActiveWslDistro();
+    if (!distro) {
+      return undefined;
+    }
+    try {
+      return distroToWindowsPath(await getDistroHome(distro), distro);
+    } catch {
+      return undefined;
+    }
+  }
+
+  // In WSL mode, translate a picked Windows path to the distro's view.
+  // Returns undefined when the path is unusable (e.g. another distro).
+  function mapPickedPath(picked: string): string | undefined {
+    const distro = getActiveWslDistro();
+    if (!distro) {
+      return picked;
+    }
+    const t = windowsToDistroPath(picked, distro);
+    if (t.error) {
+      dialog.showErrorBox('Cannot open folder', t.error);
+      return undefined;
+    }
+    if (t.warning) {
+      void dialog.showMessageBox({
+        type: 'warning',
+        message: 'Folder is on the Windows filesystem',
+        detail: t.warning,
+      });
+    }
+    return t.path;
+  }
+
   ipcMain.handle('dialog:open-workspace', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
       title: 'Open workspace',
+      defaultPath: await dialogDefaultPath(),
     });
     if (result.canceled || result.filePaths.length === 0) {
       return undefined;
     }
-    return result.filePaths[0];
+    return mapPickedPath(result.filePaths[0]);
+  });
+
+  // Like 'dialog:open-workspace' but allows selecting multiple folders,
+  // returning an array of paths (empty if cancelled).
+  ipcMain.handle('dialog:open-workspaces', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory', 'createDirectory', 'multiSelections'],
+      title: 'Open workspaces',
+      defaultPath: await dialogDefaultPath(),
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return [];
+    }
+    return result.filePaths
+      .map(mapPickedPath)
+      .filter((p): p is string => p !== undefined);
   });
 
   // Auto-updater
@@ -117,12 +217,16 @@ export function registerIpcHandlers(storageManager: StorageManager): void {
       const parsed = JSON.parse(content) as { models?: CustomModelFileEntry[] };
       const models = parsed.models || [];
 
-      // Return models with masked API keys to the UI
+      // Return models with masked API keys and keyValid flag to UI
       return models.map((m) => {
         let maskedKey: string = m.apiKey;
+        let keyValid = true;
         if (m.apiKey && m.apiKey !== 'none') {
           const decrypted = cryptoStore.decryptString(m.apiKey) as string;
-          if (decrypted.length <= 8) {
+          if (!decrypted || decrypted === 'DECRYPTION_FAILED' || decrypted.startsWith('DECRYPTION_FAILED')) {
+            keyValid = false;
+            maskedKey = 'Key needs update';
+          } else if (decrypted.length <= 8) {
             maskedKey = '********';
           } else {
             maskedKey = decrypted.substring(0, 4) + '...' + decrypted.substring(decrypted.length - 4);
@@ -131,6 +235,7 @@ export function registerIpcHandlers(storageManager: StorageManager): void {
         return {
           ...m,
           apiKey: maskedKey,
+          keyValid,
         };
       });
     } catch {
@@ -138,50 +243,86 @@ export function registerIpcHandlers(storageManager: StorageManager): void {
     }
   });
 
-  ipcMain.handle('storage:save-custom-model', async (_event, newModel: CustomModelFileEntry & { apiKey?: string }) => {
-    const geminiDir = path.join(app.getPath('home'), '.gemini', 'antigravity');
-    const filePath = path.join(geminiDir, 'custom_models.json');
-    try {
-      let models: CustomModelFileEntry[] = [];
+  ipcMain.handle(
+    'storage:save-custom-model',
+    async (_event, newModel: CustomModelFileEntry & { apiKey?: string; originalModelName?: string }) => {
+      const geminiDir = path.join(app.getPath('home'), '.gemini', 'antigravity');
+      const filePath = path.join(geminiDir, 'custom_models.json');
       try {
-        const content = await fs.readFile(filePath, 'utf-8');
-        const parsed = JSON.parse(content) as { models?: CustomModelFileEntry[] };
-        models = parsed.models || [];
-      } catch {
-        // Ignore if file doesn't exist
-      }
-
-      // Check if model already exists, if so update it, otherwise push
-      const existingIdx = models.findIndex((m) => m.name === newModel.name);
-
-      // Edit collision protection: If new key is masked and old record exists, preserve old encrypted key
-      const isMasked =
-        newModel.apiKey &&
-        (newModel.apiKey.includes('...') || newModel.apiKey.startsWith('***') || newModel.apiKey === '********');
-      if (isMasked && existingIdx !== -1) {
-        newModel.apiKey = models[existingIdx].apiKey;
-        newModel.encrypted = models[existingIdx].encrypted;
-      } else {
-        if (newModel.apiKey && newModel.apiKey !== 'none') {
-          newModel.apiKey = cryptoStore.encryptString(newModel.apiKey);
-          newModel.encrypted = true;
+        let models: CustomModelFileEntry[] = [];
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          const parsed = JSON.parse(content) as { models?: CustomModelFileEntry[] };
+          models = parsed.models || [];
+        } catch {
+          // Ignore if file doesn't exist
         }
-      }
 
-      if (existingIdx !== -1) {
-        models[existingIdx] = newModel;
-      } else {
-        models.push(newModel);
-      }
+        // Sanitize model identifier (clean leading models/ prefix)
+        const rawId = (newModel.externalModelName || newModel.name || '').trim();
+        const cleanId = rawId.replace(/^models\//, '').trim();
+        newModel.name = 'models/' + cleanId;
+        newModel.externalModelName = cleanId;
 
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, JSON.stringify({ models }, null, 2), 'utf-8');
-      return { success: true };
-    } catch (err) {
-      console.error('[IPC] Failed to save custom model:', err);
-      return { success: false, error: (err as Error).message };
-    }
-  });
+        // Auto-fill friendly display name if empty
+        if (!newModel.displayName || !newModel.displayName.trim()) {
+          newModel.displayName = cleanId;
+        }
+
+        // Handle rename if originalModelName is provided and different from newModel.name
+        const originalIdx =
+          newModel.originalModelName && newModel.originalModelName !== newModel.name
+            ? models.findIndex((m) => m.name === newModel.originalModelName || m.name === 'models/' + newModel.originalModelName!.replace(/^models\//, ''))
+            : -1;
+
+        // Check if model already exists under target name
+        const existingIdx = models.findIndex((m) => m.name === newModel.name);
+        const targetOld = originalIdx !== -1 ? models[originalIdx] : existingIdx !== -1 ? models[existingIdx] : undefined;
+
+        // Edit collision protection: If new key is masked/empty and old record exists, preserve old encrypted key
+        const isMaskedOrEmpty =
+          !newModel.apiKey ||
+          newModel.apiKey === 'none' ||
+          newModel.apiKey.includes('...') ||
+          newModel.apiKey.startsWith('***') ||
+          newModel.apiKey.includes('••') ||
+          newModel.apiKey === '********' ||
+          newModel.apiKey === 'Key needs update';
+
+        if (isMaskedOrEmpty && targetOld && targetOld.apiKey && targetOld.apiKey !== 'none') {
+          newModel.apiKey = targetOld.apiKey;
+          newModel.encrypted = targetOld.encrypted;
+        } else {
+          if (newModel.apiKey && newModel.apiKey !== 'none') {
+            newModel.apiKey = cryptoStore.encryptString(newModel.apiKey);
+            newModel.encrypted = true;
+          }
+        }
+
+        // Clean up original entry if renamed
+        if (originalIdx !== -1) {
+          models.splice(originalIdx, 1);
+        }
+
+        // Clean up helper property
+        delete (newModel as { originalModelName?: string }).originalModelName;
+
+        const updatedIdx = models.findIndex((m) => m.name === newModel.name);
+        if (updatedIdx !== -1) {
+          models[updatedIdx] = newModel;
+        } else {
+          models.push(newModel);
+        }
+
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, JSON.stringify({ models }, null, 2), 'utf-8');
+        return { success: true };
+      } catch (err) {
+        console.error('[IPC] Failed to save custom model:', err);
+        return { success: false, error: (err as Error).message };
+      }
+    },
+  );
 
   ipcMain.handle('storage:delete-custom-model', async (_event, modelName: string) => {
     const geminiDir = path.join(app.getPath('home'), '.gemini', 'antigravity');
@@ -196,13 +337,40 @@ export function registerIpcHandlers(storageManager: StorageManager): void {
         // Ignore if file doesn't exist
       }
 
-      models = models.filter((m) => m.name !== modelName);
+      const cleanTarget = modelName.replace(/^models\//, '').trim();
+      models = models.filter((m) => {
+        const mClean = (m.name || '').replace(/^models\//, '').trim();
+        return mClean !== cleanTarget && m.name !== modelName;
+      });
 
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, JSON.stringify({ models }, null, 2), 'utf-8');
       return { success: true };
     } catch (err) {
       console.error('[IPC] Failed to delete custom model:', err);
+      return { success: false, error: (err as Error).message };
+    }
+  });
+
+  ipcMain.handle('storage:update-provider-keys', async (_event, provider: string, newApiKey: string) => {
+    const geminiDir = path.join(app.getPath('home'), '.gemini', 'antigravity');
+    const filePath = path.join(geminiDir, 'custom_models.json');
+    try {
+      const content = await fs.readFile(filePath, 'utf-8');
+      const parsed = JSON.parse(content) as { models?: CustomModelFileEntry[] };
+      const models = parsed.models || [];
+      const encryptedKey = cryptoStore.encryptString(newApiKey.trim());
+      let updatedCount = 0;
+      for (const m of models) {
+        if (m.provider === provider || (provider === 'openrouter' && (m.apiUrl?.includes('openrouter') || m.provider === 'openrouter'))) {
+          m.apiKey = encryptedKey;
+          m.encrypted = true;
+          updatedCount++;
+        }
+      }
+      await fs.writeFile(filePath, JSON.stringify({ models }, null, 2), 'utf-8');
+      return { success: true, updatedCount };
+    } catch (err) {
       return { success: false, error: (err as Error).message };
     }
   });
@@ -310,19 +478,50 @@ export function registerIpcHandlers(storageManager: StorageManager): void {
         };
 
         // Add auth header
-        if (model.apiKey && model.apiKey !== 'none') {
-          let key = model.apiKey;
+        let key = model.apiKey;
+        const isMaskedOrEmpty =
+          !key ||
+          key === 'none' ||
+          key.includes('...') ||
+          key.startsWith('***') ||
+          key.includes('••') ||
+          key === '********';
+
+        if (isMaskedOrEmpty && (model as { name?: string }).name) {
           try {
-            key = cryptoStore.decryptString(model.apiKey);
+            const geminiDir = path.join(app.getPath('home'), '.gemini', 'antigravity');
+            const filePath = path.join(geminiDir, 'custom_models.json');
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const content = require('fs').readFileSync(filePath, 'utf-8');
+            const parsed = JSON.parse(content) as { models?: CustomModelFileEntry[] };
+            const found = parsed.models?.find((m) => m.name === (model as { name?: string }).name);
+            if (found?.apiKey && found.apiKey !== 'none') {
+              key = cryptoStore.decryptString(found.apiKey) || found.apiKey;
+            }
+          } catch {
+            /* key lookup fallback */
+          }
+        } else if (key && key !== 'none') {
+          try {
+            key = cryptoStore.decryptString(key);
           } catch {
             /* key might not be encrypted */
           }
+        }
 
+        if (key && key !== 'none' && !key.includes('...')) {
           if (model.provider === 'anthropic') {
             options.headers = {
               'x-api-key': key,
-              'anthropic-version': '2025-04-01',
+              'anthropic-version': '2023-06-01',
             };
+            const wsId =
+              (model as unknown as { workspaceId?: string; anthropicWorkspaceId?: string }).workspaceId ||
+              (model as unknown as { workspaceId?: string; anthropicWorkspaceId?: string }).anthropicWorkspaceId ||
+              process.env.ANTHROPIC_WORKSPACE_ID;
+            if (wsId) {
+              (options.headers as Record<string, string>)['anthropic-workspace-id'] = wsId;
+            }
           } else if (model.provider === 'google') {
             options.headers = {
               'x-goog-api-key': key,
@@ -335,18 +534,37 @@ export function registerIpcHandlers(storageManager: StorageManager): void {
         }
 
         const req = client.request(options, (res: { statusCode?: number; resume: () => void }) => {
-          // Any response (even 401/403) means the endpoint is reachable
-          if (res.statusCode! >= 200 && res.statusCode! < 500) {
+          const code = res.statusCode || 0;
+          if (code === 401) {
+            resolve({
+              success: false,
+              status: code,
+              error: 'Invalid API Key (HTTP 401 Unauthorized)',
+            });
+          } else if (code === 403) {
+            resolve({
+              success: false,
+              status: code,
+              error: 'Access Forbidden (HTTP 403 Forbidden)',
+            });
+          } else if (code >= 200 && code < 400) {
             resolve({
               success: true,
-              status: res.statusCode,
-              message: `Endpoint reachable (HTTP ${res.statusCode})`,
+              status: code,
+              message: `Connected & Authenticated (HTTP ${code}) ✓`,
+            });
+          } else if (code === 405) {
+            // Method Not Allowed on chat completions endpoint (normal for HEAD/GET on POST-only endpoints)
+            resolve({
+              success: true,
+              status: code,
+              message: `Endpoint reachable (HTTP 405) ✓`,
             });
           } else {
             resolve({
               success: false,
-              status: res.statusCode,
-              error: `Server returned HTTP ${res.statusCode}`,
+              status: code,
+              error: `Server returned HTTP ${code}`,
             });
           }
           res.resume(); // consume response to free memory
@@ -446,6 +664,82 @@ export function registerIpcHandlers(storageManager: StorageManager): void {
     }
   });
 
+  let activeContextMenu: Electron.Menu | null = null;
+  ipcMain.handle('window:show-context-menu', async (_event, items: ContextMenuItemParam[]) => {
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+    if (!win || !Array.isArray(items) || items.length === 0) {
+      return null;
+    }
+    activeContextMenu?.closePopup?.(win);
+    return new Promise((resolve) => {
+      let settled = false;
+      const template = buildContextMenuTemplate(items, (id) => {
+        if (!settled) {
+          settled = true;
+          activeContextMenu = null;
+          resolve(id);
+        }
+      });
+      const menu = Menu.buildFromTemplate(template);
+      activeContextMenu = menu;
+      menu.popup({
+        window: win,
+        callback: () => {
+          setImmediate(() => {
+            if (activeContextMenu === menu) {
+              activeContextMenu = null;
+            }
+            if (!settled) {
+              settled = true;
+              resolve(null);
+            }
+          });
+        },
+      });
+    });
+  });
+
+  ipcMain.handle('window:close-context-menu', () => {
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+    activeContextMenu?.closePopup?.(win);
+    activeContextMenu = null;
+  });
+
+  // Zoom — main-process source of truth so the level is reliably persisted
+  // across restarts on all platforms (works around a Chromium quirk on Windows
+  // where renderer-only webFrame.setZoomLevel changes aren't cached).
+  const ZOOM_LEVEL_KEY = 'zoomLevel';
+  const ZOOM_STEP = 0.5;
+  ipcMain.handle('window:zoom-in', async () => {
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+    if (win) {
+      const newLevel = win.webContents.getZoomLevel() + ZOOM_STEP;
+      win.webContents.setZoomLevel(newLevel);
+      await storageManager.updateItems({
+        [ZOOM_LEVEL_KEY]: String(newLevel),
+      });
+    }
+  });
+
+  ipcMain.handle('window:zoom-out', async () => {
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+    if (win) {
+      const newLevel = win.webContents.getZoomLevel() - ZOOM_STEP;
+      win.webContents.setZoomLevel(newLevel);
+      await storageManager.updateItems({
+        [ZOOM_LEVEL_KEY]: String(newLevel),
+      });
+    }
+  });
+
+  ipcMain.handle('window:reset-zoom', async () => {
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+    if (win) {
+      win.webContents.setZoomLevel(0);
+      await storageManager.updateItems({ [ZOOM_LEVEL_KEY]: String(0) });
+    }
+  });
+
   // Auto-updater manual check
   ipcMain.handle('updater:check-for-updates', () => {
     checkForUpdates(true);
@@ -453,9 +747,54 @@ export function registerIpcHandlers(storageManager: StorageManager): void {
 
   // Safe external shell launch
   ipcMain.handle('shell:open-external', async (_event, url: string) => {
-    if (url.startsWith('https://') || url.startsWith('http://')) {
+    if (url.startsWith('https://') || url.startsWith('http://') || url.startsWith('antigravity-ide://')) {
       await shell.openExternal(url);
     }
+  });
+
+  ipcMain.handle('shell:reveal-in-file-picker', (_event, filePath: string) => {
+    const distro = getActiveWslDistro();
+    if (distro) {
+      const posixPath = fileURLToPath(filePath, { windows: false } as { windows?: boolean });
+      shell.showItemInFolder(distroToWindowsPath(posixPath, distro));
+      return;
+    }
+    shell.showItemInFolder(fileURLToPath(filePath));
+  });
+
+  // IDE installation check
+  ipcMain.handle('ide:is-installed', async () => {
+    try {
+      // Check standard installation path (works even if the app has never been launched).
+      await fs.stat(getIdeInstallPath());
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  // WSL environment switching (Windows only). Lets the web UI (e.g. the
+  // Settings page) discover WSL distros and relaunch the app into/out of one.
+  ipcMain.handle('wsl:get-state', async () => {
+    if (!isWslAvailable()) {
+      return { available: false, activeDistro: null, distros: [] };
+    }
+    try {
+      const distros = await listWslDistros();
+      return {
+        available: true,
+        activeDistro: getActiveWslDistro() || null,
+        distros: distros.map((d) => ({ name: d.name, isDefault: d.isDefault })),
+      };
+    } catch (err) {
+      log.error('wsl:get-state failed:', err);
+      return { available: false, activeDistro: null, distros: [] };
+    }
+  });
+
+  // Relaunches into the given distro, or locally when `distro` is empty.
+  ipcMain.handle('wsl:connect', (_event, distro: string) => {
+    relaunchWithWslDistro(distro || '');
   });
 }
 

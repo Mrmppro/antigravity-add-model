@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { getProviderHeaders } from '../proxy/registry';
 
 // We need to mock electron-log and fs/path before importing the registry
 vi.mock('electron-log', () => ({
@@ -60,14 +61,12 @@ describe('Registry - OpenRouter support', () => {
     expect(openAIHeaders.Authorization).toBe(openRouterHeaders.Authorization);
   });
 
-  it('anthropic should use x-api-key header (not Bearer)', () => {
+  it('anthropic should use x-api-key header and version 2023-06-01', () => {
     // Sanity check: anthropic uses different auth
-    const anthropicHeaders = {
-      'Content-Type': 'application/json',
-      'x-api-key': 'sk-ant-key',
-      'anthropic-version': '2025-04-01',
-    };
+    const anthropicHeaders = getProviderHeaders('anthropic', 'sk-ant-key', { workspaceId: 'wrkspc_test123' });
     expect(anthropicHeaders['x-api-key']).toBe('sk-ant-key');
+    expect(anthropicHeaders['anthropic-version']).toBe('2023-06-01');
+    expect(anthropicHeaders['anthropic-workspace-id']).toBe('wrkspc_test123');
     expect(anthropicHeaders['Authorization']).toBeUndefined();
   });
 });

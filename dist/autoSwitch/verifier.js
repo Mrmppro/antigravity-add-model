@@ -223,7 +223,7 @@ async function verifyModel(model, apiKey) {
         return { ok: false, route, messages: [verified.lastError] };
     }
     const url = buildProbeUrl(model);
-    const headers = registry.getProviderHeaders(provider, apiKey);
+    const headers = registry.getProviderHeaders(provider, apiKey, model);
     const allowUnauthorized = model.allowUnauthorized === true;
     // ── Probe 1: can this model answer a plain request at all? ──
     try {

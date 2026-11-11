@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as shared from '../proxy/shared';
-import { mapGeminiToAnthropic, mapAnthropicToGemini, mapAnthropicChunkToGemini } from '../proxy/translators/anthropic';
+import {
+  mapGeminiToAnthropic,
+  mapAnthropicToGemini,
+  mapAnthropicChunkToGemini,
+  normalizeSchemaForAnthropic,
+} from '../proxy/translators/anthropic';
 
 // Mock detectModelCapabilitiesByName to avoid importing the full module chain
 vi.mock('../proxy/modelUtils', () => ({
@@ -132,6 +137,43 @@ describe('mapGeminiToAnthropic', () => {
     expect(result.tools).toHaveLength(1);
     expect(result.tools![0].name).toBe('get_weather');
     expect(result.tools![0].input_schema).toBeDefined();
+    expect((result.tools![0].input_schema as any).type).toBe('object');
+    expect((result.tools![0].input_schema as any).properties.city.type).toBe('string');
+  });
+
+  it('should normalize complex Gemini schemas to valid JSON Schema draft 2020-12', () => {
+    const rawSchema = {
+      type: 'OBJECT',
+      propertyOrdering: ['cmd', 'meta'],
+      nullable: false,
+      properties: {
+        cmd: { description: 'Shell command' }, // missing type
+        tags: { type: 'ARRAY', items: { type: 'STRING' } },
+        meta: {
+          type: 'OBJECT',
+          nullable: false,
+          properties: {
+            user: { type: 'STRING' },
+            active: { type: 'BOOLEAN' },
+          },
+          required: ['user', 'nonExistent'],
+        },
+      },
+      required: ['cmd', 'missingField'],
+    };
+
+    const normalized = normalizeSchemaForAnthropic(rawSchema) as any;
+    expect(normalized.type).toBe('object');
+    expect(normalized.propertyOrdering).toBeUndefined();
+    expect(normalized.nullable).toBeUndefined();
+    expect(normalized.properties.cmd.type).toBe('string');
+    expect(normalized.properties.tags.type).toBe('array');
+    expect(normalized.properties.tags.items.type).toBe('string');
+    expect(normalized.properties.meta.type).toBe('object');
+    expect(normalized.properties.meta.properties.user.type).toBe('string');
+    expect(normalized.properties.meta.properties.active.type).toBe('boolean');
+    expect(normalized.properties.meta.required).toEqual(['user']);
+    expect(normalized.required).toEqual(['cmd']);
   });
 });
 

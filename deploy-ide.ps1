@@ -52,6 +52,9 @@ foreach ($subDir in @("proxy", "autoSwitch", "services")) {
     }
 }
 
+# Ensure Node treats the proxy as CommonJS within the IDE ESM environment
+Set-Content -Path (Join-Path $IdeProxyDir "package.json") -Value '{"type": "commonjs"}' -Encoding UTF8
+
 # Copy electron-log to IDE node_modules
 $IdeElectronLog = "$IdeAppDir\node_modules\electron-log"
 if (-not (Test-Path $IdeElectronLog)) {
@@ -158,25 +161,39 @@ if (Test-Path $ideLs) {
     try {
         $outBytes = [System.IO.File]::ReadAllBytes($ideLs)
         $content = [System.Text.Encoding]::ASCII.GetString($outBytes)
-        if (-not $content.Contains($PatchedUrl)) {
+        if ($content.Contains($PatchedUrl)) {
+            Write-Host "   OK - IDE Language Server binary already patched" -ForegroundColor Green
+        } else {
             $offset = $content.IndexOf($OriginalUrl, [System.StringComparison]::Ordinal)
             if ($offset -ge 0) {
                 $LsBackup = "$ideLs.bak"
                 if (-not (Test-Path $LsBackup)) { Copy-Item $ideLs $LsBackup -Force }
                 $replaceBytes = [System.Text.Encoding]::ASCII.GetBytes($PatchedUrl)
                 [System.Array]::Copy($replaceBytes, 0, $outBytes, $offset, $replaceBytes.Length)
-                [System.IO.File]::WriteAllBytes($ideLs, $outBytes)
-                Write-Host "   OK - IDE Language Server binary patched" -ForegroundColor Green
+                $written = $false
+                for ($attempt = 1; $attempt -le 5; $attempt++) {
+                    try {
+                        Get-Process -Name "language_server_windows_x64*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                        Start-Sleep -Milliseconds 500
+                        [System.IO.File]::WriteAllBytes($ideLs, $outBytes)
+                        $written = $true
+                        break
+                    } catch {
+                        Start-Sleep -Seconds 1
+                    }
+                }
+                if ($written) {
+                    Write-Host "   OK - IDE Language Server binary patched" -ForegroundColor Green
+                } else {
+                    Write-Host "   ERROR: IDE Language Server binary locked, could not write patch!" -ForegroundColor Red
+                }
+            } else {
+                Write-Host "   WARNING - Original URL not found in IDE binary" -ForegroundColor Yellow
             }
         }
-    } catch {}
-}
-
-# Sync Models & MCP Config
-Write-Host "[5/5] Syncing Custom Models & MCP Config..." -ForegroundColor Yellow
-$repatchScript = "d:\mrmp skills\gravity-skills\scripts\Repatch-AntigravityModels.ps1"
-if (Test-Path $repatchScript) {
-    & $repatchScript -Force -Confirm:$false
+    } catch {
+        Write-Host "   WARNING - Could not patch IDE binary: $_" -ForegroundColor Yellow
+    }
 }
 
 # Launch IDE

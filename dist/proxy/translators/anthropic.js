@@ -40,6 +40,7 @@ exports.mapGeminiToAnthropic = mapGeminiToAnthropic;
 exports.mapAnthropicToGemini = mapAnthropicToGemini;
 exports.mapAnthropicChunkToGemini = mapAnthropicChunkToGemini;
 exports.mapGeminiToolsToAnthropic = mapGeminiToolsToAnthropic;
+exports.normalizeSchemaForAnthropic = normalizeSchemaForAnthropic;
 /**
  * Anthropic provider translator.
  * Handles Gemini ↔ Anthropic request/response mapping and streaming SSE events.
@@ -50,6 +51,115 @@ const utils_1 = require("./utils");
 const shared_1 = require("../shared");
 const modelUtils_1 = require("../modelUtils");
 // ─── REQUEST: Gemini → Anthropic ──────────────────────────────────────────
+function cleanPropertySchema(raw) {
+    const schema = {};
+    if (typeof raw.description === 'string' && raw.description) {
+        schema.description = raw.description;
+    }
+    if (typeof raw.title === 'string' && raw.title) {
+        schema.title = raw.title;
+    }
+    if (Array.isArray(raw.enum) && raw.enum.length > 0) {
+        schema.enum = raw.enum;
+    }
+    if (raw.default !== undefined && raw.default !== null) {
+        schema.default = raw.default;
+    }
+    if (typeof raw.minimum === 'number')
+        schema.minimum = raw.minimum;
+    if (typeof raw.maximum === 'number')
+        schema.maximum = raw.maximum;
+    if (typeof raw.minLength === 'number')
+        schema.minLength = raw.minLength;
+    if (typeof raw.maxLength === 'number')
+        schema.maxLength = raw.maxLength;
+    if (typeof raw.pattern === 'string' && raw.pattern)
+        schema.pattern = raw.pattern;
+    // Type determination
+    if (Array.isArray(raw.type)) {
+        schema.type = raw.type.map((t) => String(t).toLowerCase());
+    }
+    else {
+        const rawType = typeof raw.type === 'string' ? raw.type.toLowerCase() : undefined;
+        if (rawType === 'int' || rawType === 'integer') {
+            schema.type = 'integer';
+        }
+        else if (rawType === 'number' || rawType === 'float' || rawType === 'double') {
+            schema.type = 'number';
+        }
+        else if (rawType === 'boolean' || rawType === 'bool') {
+            schema.type = 'boolean';
+        }
+        else if (rawType === 'array') {
+            schema.type = 'array';
+            if (raw.items && typeof raw.items === 'object' && !Array.isArray(raw.items)) {
+                schema.items = cleanPropertySchema(raw.items);
+            }
+            else {
+                schema.items = { type: 'string' };
+            }
+        }
+        else if (rawType === 'object' || raw.properties) {
+            schema.type = 'object';
+            const subProps = {};
+            if (raw.properties && typeof raw.properties === 'object' && !Array.isArray(raw.properties)) {
+                for (const [k, v] of Object.entries(raw.properties)) {
+                    if (v && typeof v === 'object' && !Array.isArray(v)) {
+                        subProps[k] = cleanPropertySchema(v);
+                    }
+                    else {
+                        subProps[k] = { type: 'string' };
+                    }
+                }
+            }
+            schema.properties = subProps;
+            if (Array.isArray(raw.required)) {
+                const validSubReq = raw.required
+                    .filter((r) => typeof r === 'string' && Object.prototype.hasOwnProperty.call(subProps, r));
+                if (validSubReq.length > 0) {
+                    schema.required = validSubReq;
+                }
+            }
+        }
+        else {
+            schema.type = 'string';
+        }
+    }
+    return schema;
+}
+function normalizeSchemaForAnthropic(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return { type: 'object', properties: {} };
+    }
+    const obj = raw;
+    const result = {
+        type: 'object',
+    };
+    if (typeof obj.description === 'string' && obj.description) {
+        result.description = obj.description;
+    }
+    const properties = {};
+    const rawProps = obj.properties && typeof obj.properties === 'object' && !Array.isArray(obj.properties)
+        ? obj.properties
+        : {};
+    for (const [propName, propVal] of Object.entries(rawProps)) {
+        if (propVal && typeof propVal === 'object' && !Array.isArray(propVal)) {
+            properties[propName] = cleanPropertySchema(propVal);
+        }
+        else {
+            properties[propName] = { type: 'string' };
+        }
+    }
+    result.properties = properties;
+    if (Array.isArray(obj.required)) {
+        const validRequired = obj.required
+            .filter((r) => typeof r === 'string' && Object.prototype.hasOwnProperty.call(properties, r));
+        if (validRequired.length > 0) {
+            result.required = validRequired;
+        }
+    }
+    return result;
+}
 function mapGeminiToolsToAnthropic(geminiTools) {
     if (!geminiTools || !Array.isArray(geminiTools))
         return [];
@@ -57,19 +167,10 @@ function mapGeminiToolsToAnthropic(geminiTools) {
     for (const toolGroup of geminiTools) {
         if (toolGroup.functionDeclarations && Array.isArray(toolGroup.functionDeclarations)) {
             for (const func of toolGroup.functionDeclarations) {
-                const params = func.parameters
-                    ? JSON.parse(JSON.stringify(func.parameters))
-                    : { type: 'OBJECT', properties: {} };
-                if (params.type && typeof params.type === 'string') {
-                    params.type = params.type.toLowerCase();
-                }
-                if (params.properties) {
-                    (0, utils_1.fixParamTypes)(params.properties);
-                }
                 anthropicTools.push({
                     name: func.name,
-                    description: func.description || '',
-                    input_schema: params,
+                    description: func.description || func.name,
+                    input_schema: normalizeSchemaForAnthropic(func.parameters),
                 });
             }
         }

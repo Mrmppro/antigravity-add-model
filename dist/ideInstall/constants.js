@@ -81,7 +81,7 @@ function getIdeInstallPath() {
         case 'darwin':
             return '/Applications/Antigravity IDE.app';
         case 'win32':
-            return path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'Antigravity IDE');
+            return path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'Antigravity IDE', 'Antigravity IDE.exe');
         case 'linux':
             return path.join(os.homedir(), '.local', 'share', 'antigravity-ide');
         default:

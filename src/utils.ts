@@ -12,6 +12,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { getSettingsPbPath } from './paths';
 import { attachLoadingOverlay } from './loadingOverlay';
+import { StorageManager } from './storage';
+import { getActiveWslDistro } from './wsl';
 
 export let showQuitConfirmation = false;
 
@@ -70,16 +72,19 @@ function ensureAppIsInDock(): void {
  * Uses a hidden title bar with native traffic lights on macOS.
  * Node integration is disabled and context isolation is enabled for security.
  */
-export function createWindow(url: string): BrowserWindow {
+export function createWindow(url: string, storageManager?: StorageManager): BrowserWindow {
   ensureAppIsInDock();
   const theme = getThemeMode().toUpperCase();
   const isLight = theme.includes('LIGHT');
   const backgroundColor = isLight ? '#FAFAFA' : '#131313';
   const foregroundColor = isLight ? '#383A42' : '#FAFAFA';
+  const wslBadge = getActiveWslDistro() ? ` (WSL: ${getActiveWslDistro()})` : '';
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
-    title: app.getName(),
+    minWidth: 500,
+    minHeight: 400,
+    title: app.getName() + wslBadge,
     icon: path.join(__dirname, '..', 'icon.png'),
     titleBarStyle: 'hidden',
     titleBarOverlay: isMacOS()
@@ -95,22 +100,69 @@ export function createWindow(url: string): BrowserWindow {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
+      devTools: !app.isPackaged,
+      webviewTag: true,
     },
   });
+
+  // Prevent the menu dropdown from being very wide due to long page titles
+  win.on('page-title-updated', (event, title) => {
+    const maxLength = 25;
+    const truncated = title.length > maxLength ? title.substring(0, maxLength) + '...' : title;
+    if (truncated !== title || wslBadge) {
+      event.preventDefault();
+      win.setTitle(truncated + wslBadge);
+    }
+  });
+
   win.webContents.setWindowOpenHandler((details) => {
     void shell.openExternal(details.url);
     return { action: 'deny' };
   });
+
   attachLoadingOverlay(win, foregroundColor, backgroundColor);
   registerKeybindings(win, {
     createNewWindow: () => {
-      void createWindow(url);
+      void createWindow(url, storageManager);
     },
     onQuitRequested: () => {
       showQuitConfirmation = true;
       app.quit();
     },
   });
+
+  // Zoom persistence — restore saved level and capture future changes.
+  if (storageManager) {
+    const ZOOM_LEVEL_KEY = 'zoomLevel';
+    let isRestoringZoom = false;
+    const applyStoredZoomLevel = async () => {
+      const items = await storageManager.getItems();
+      const stored = items[ZOOM_LEVEL_KEY];
+      if (stored !== undefined && stored !== null) {
+        const level = parseFloat(stored);
+        if (!isNaN(level)) {
+          isRestoringZoom = true;
+          win.webContents.setZoomLevel(level);
+          isRestoringZoom = false;
+        }
+      }
+    };
+    win.webContents.on('did-finish-load', () => {
+      void applyStoredZoomLevel();
+    });
+    // Capture zoom changes from native menu accelerators, trackpad
+    // pinch-to-zoom, or Ctrl+scroll so they are also persisted.
+    win.webContents.on('zoom-changed', (_event, _direction) => {
+      if (isRestoringZoom) {
+        return;
+      }
+      const currentLevel = win.webContents.getZoomLevel();
+      void storageManager.updateItems({
+        [ZOOM_LEVEL_KEY]: String(currentLevel),
+      });
+    });
+  }
+
   void win.loadURL(url);
   return win;
 }
@@ -118,13 +170,16 @@ export function createWindow(url: string): BrowserWindow {
 /**
  * Focuses a window if it exists, or creates a new one.
  */
-export const showOrCreateWindow = (port: number): void => {
+export const showOrCreateWindow = (port: number, storageManager?: StorageManager): void => {
   const wins = BrowserWindow.getAllWindows();
   if (wins.length > 0) {
+    if (wins[0].isMinimized()) {
+      wins[0].restore();
+    }
     wins[0].show();
     wins[0].focus();
   } else {
-    createWindow(`${WINDOW_ORIGIN}:${port}/`);
+    createWindow(`${WINDOW_ORIGIN}:${port}/`, storageManager);
   }
 };
 

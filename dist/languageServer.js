@@ -38,6 +38,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.LS_BINARY = void 0;
 exports.getLsCL = getLsCL;
+exports.extractOpenUrl = extractOpenUrl;
 exports.getLsProcess = getLsProcess;
 exports.getLsPort = getLsPort;
 exports.clearLsProcess = clearLsProcess;
@@ -57,6 +58,7 @@ const stream_1 = require("stream");
 const paths_1 = require("./paths");
 const utils_1 = require("./utils");
 const proxy_1 = require("./proxy");
+const wsl_1 = require("./wsl");
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
@@ -89,6 +91,7 @@ let _lsPort = 0;
 let _intentionalTermination = false;
 let _restartCount = 0;
 let _lastRestartTime = 0;
+let _lsStdinIsLiveness = false;
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -117,6 +120,17 @@ function getLsCL() {
 const PORT_PATTERN = /listening on \w+ port at (\d+) for HTTP(S)?\b/i;
 // Pattern: OAuth authorization URL
 const AUTH_URL_PATTERN = /https:\/\/accounts\.google\.com\/o\/oauth2\/auth\S+/;
+// Pattern: URL the LS asks the host to open (printed instead of opening a
+// browser when ANTIGRAVITY_VSCODE_HOST=1 is set, e.g. sign-in in WSL mode).
+const OPEN_URL_PATTERN = /ANTIGRAVITY_OPEN_URL: (\S+)/;
+/** Returns the validated http(s) URL from an ANTIGRAVITY_OPEN_URL line, if any. */
+function extractOpenUrl(line) {
+    const m = OPEN_URL_PATTERN.exec(line);
+    if (!m || !URL.canParse(m[1])) {
+        return null;
+    }
+    return /^https?:$/.test(new URL(m[1]).protocol) ? m[1] : null;
+}
 /** Returns the active language server process, or null if not running. */
 function getLsProcess() {
     return _lsProcess;
@@ -180,7 +194,7 @@ function setupNodeModules(env, modules) {
  * during startup.
  */
 function startLanguageServer(port, csrf, options = {}) {
-    const { headless, hostBridgeUrl, hostBridgeToken } = options;
+    const { headless, hostBridgeUrl, hostBridgeToken, wsl } = options;
     return new Promise(async (resolve, reject) => {
         const logStream = fs.createWriteStream((0, paths_1.getLsLogPath)(), { flags: 'w' });
         let proxyPort;
@@ -193,8 +207,6 @@ function startLanguageServer(port, csrf, options = {}) {
         const apiServerUrl = proxyPort ? `http://localhost:${proxyPort}` : 'https://generativelanguage.googleapis.com';
         const args = [
             '--standalone',
-            '--persistent_mode=true',
-            '--disable_telemetry=true',
             '--override_ide_name',
             'antigravity',
             '--subclient_type',
@@ -213,8 +225,6 @@ function startLanguageServer(port, csrf, options = {}) {
             apiServerUrl,
             '--cloud_code_endpoint',
             apiServerUrl,
-            '--inference_api_server_url',
-            apiServerUrl,
             '--enable_sidecars',
         ];
         if (hostBridgeUrl && hostBridgeToken) {
@@ -223,8 +233,17 @@ function startLanguageServer(port, csrf, options = {}) {
         if (headless) {
             args.push('--headless');
         }
-        const safeArgs = args.map((a) => (a === csrf || (hostBridgeToken && a.includes(hostBridgeToken)) ? '***' : a));
-        console.log(`\nSpawning: ${exports.LS_BINARY} ${safeArgs.join(' ')}\n`);
+        let spawnCmd = exports.LS_BINARY;
+        let spawnArgs = args;
+        if (wsl) {
+            // ANTIGRAVITY_VSCODE_HOST=1 makes the LS print sign-in URLs
+            // --exit_on_stdin_close ties the LS lifetime to our stdin pipe
+            args.push('--exit_on_stdin_close');
+            spawnCmd = wsl_1.WSL_EXE;
+            spawnArgs = (0, wsl_1.wslShellArgs)(wsl.distro, `ANTIGRAVITY_VSCODE_HOST=1 exec "${wsl.binaryPath}" "$@"`, args);
+        }
+        const safeArgs = spawnArgs.map((a) => (a === csrf || (hostBridgeToken && a.includes(hostBridgeToken)) ? '***' : a));
+        console.log(`\nSpawning: ${spawnCmd} ${safeArgs.join(' ')}\n`);
         const env = { ...process.env, ...(0, shell_env_1.shellEnvSync)() };
         env['AGY_BROWSER_ACTIVE_PORT_FILE'] = (0, paths_1.getActivePortFilePath)();
         (0, utils_1.setupNodeWrapper)(env);
@@ -235,11 +254,11 @@ function startLanguageServer(port, csrf, options = {}) {
                 relativePath: ['build', 'src', 'bin', 'chrome-devtools-mcp.js'],
             },
         ]);
-        _lsProcess = (0, child_process_1.spawn)(exports.LS_BINARY, args, {
+        _lsProcess = (0, child_process_1.spawn)(spawnCmd, spawnArgs, {
             stdio: ['pipe', 'pipe', 'pipe'],
             env: env,
         });
-        // Keep stdin pipe open — closing stdin can trigger EOF exit in language server daemons
+        _lsStdinIsLiveness = !!wsl;
         const combined = new stream_1.PassThrough();
         _lsProcess.stdout?.pipe(combined, { end: false });
         _lsProcess.stderr?.pipe(combined, { end: false });
@@ -293,6 +312,11 @@ function startLanguageServer(port, csrf, options = {}) {
                 console.log('  After authorizing, paste the authorization code below.');
                 console.log(`  ${authMatch[0]}`);
                 console.log('='.repeat(60) + '\n');
+            }
+            const openUrl = extractOpenUrl(line);
+            if (openUrl) {
+                console.log(`Opening URL requested by the language server: ${openUrl}`);
+                void electron_1.shell.openExternal(openUrl);
             }
         });
         const exitPromise = new Promise((exitResolve) => {
@@ -391,7 +415,15 @@ async function killLanguageServer() {
                 resolve();
             });
         });
-        proc.kill('SIGTERM');
+        if (_lsStdinIsLiveness && proc.stdin && !proc.stdin.destroyed) {
+            // WSL: a Windows SIGTERM only reaches the wsl.exe relay, not the LS in
+            // the distro. Closing stdin triggers the LS's --exit_on_stdin_close
+            // graceful shutdown instead.
+            proc.stdin.end();
+        }
+        else {
+            proc.kill('SIGTERM');
+        }
         const result = await Promise.race([
             exitPromise.then(() => 'exited'),
             new Promise((resolve) => setTimeout(() => resolve('timeout'), 5000)),

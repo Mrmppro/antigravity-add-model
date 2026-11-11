@@ -50,6 +50,7 @@ export function getIdeInstallPath(): string {
         process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
         'Programs',
         'Antigravity IDE',
+        'Antigravity IDE.exe',
       );
     case 'linux':
       return path.join(os.homedir(), '.local', 'share', 'antigravity-ide');

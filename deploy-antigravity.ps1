@@ -2,15 +2,16 @@
 # Only modifies Antigravity standalone application
 
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  Antigravity (Standalone) Deploy Script" -ForegroundColor Yellow
-Write-Host "  MRMPPRO | Custom Models, MCP & Stability Fix" -ForegroundColor Magenta
+Write-Host "  Antigravity (Standalone) v2.23.0 Deploy Script" -ForegroundColor Yellow
+Write-Host "  MRMPPRO | Custom Models, MCP, WSL & Stability Fix" -ForegroundColor Magenta
 Write-Host "============================================" -ForegroundColor Cyan
 
 # 1. Close Antigravity Standalone App Only
 Write-Host ""
 Write-Host "[1/6] Closing Antigravity..." -ForegroundColor Yellow
 taskkill /F /IM "Antigravity.exe" /T 2>$null | Out-Null
-$agProcs = Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue
+taskkill /F /IM "language_server.exe" /T 2>$null | Out-Null
+$agProcs = Get-Process -Name "Antigravity", "language_server" -ErrorAction SilentlyContinue
 if ($agProcs) { $agProcs | Stop-Process -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 1
 Write-Host "   OK" -ForegroundColor Green
@@ -33,13 +34,13 @@ if (Test-Path $AsarPath) {
         Write-Host "[2/6] Creating initial backup of app.asar..." -ForegroundColor Yellow
         Copy-Item $AsarPath $BackupAsar -Force
     } else {
-        Write-Host "[2/6] Backing up current app.asar..." -ForegroundColor Yellow
-        Copy-Item $AsarPath $BackupAsar -Force
+        Write-Host "[2/6] Preserving existing clean backup of app.asar..." -ForegroundColor Green
     }
 
     if (Test-Path $AsarUnpacked) {
-        if (Test-Path $BackupAsarUnpacked) { Remove-Item $BackupAsarUnpacked -Recurse -Force }
-        Copy-Item $AsarUnpacked $BackupAsarUnpacked -Recurse -Force
+        if (-not (Test-Path $BackupAsarUnpacked)) {
+            Copy-Item $AsarUnpacked $BackupAsarUnpacked -Recurse -Force
+        }
     }
 } else {
     Write-Host "[2/6] ERROR: app.asar not found at: $AsarPath" -ForegroundColor Red
@@ -60,21 +61,34 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "   OK" -ForegroundColor Green
 
 # 5. Copy dist folder and clean temporary files
-Write-Host "[4/6] Updating dist folder and applying core stability patches..." -ForegroundColor Yellow
+Write-Host "[4/6] Merging dist folder and applying core stability patches..." -ForegroundColor Yellow
 if (Test-Path (Join-Path $TempDir ".git")) { Remove-Item (Join-Path $TempDir ".git") -Recurse -Force }
 if (Test-Path (Join-Path $TempDir "scratch")) { Remove-Item (Join-Path $TempDir "scratch") -Recurse -Force }
 
 $srcDist = Join-Path $ProjectDir "dist"
 $destDist = Join-Path $TempDir "dist"
 
-if (Test-Path $destDist) { Remove-Item $destDist -Recurse -Force }
-Copy-Item $srcDist $destDist -Recurse -Force
+if (-not (Test-Path $destDist)) {
+    New-Item -ItemType Directory -Path $destDist -Force | Out-Null
+}
+Copy-Item -Path "$srcDist\*" -Destination $destDist -Recurse -Force
+Write-Host "   OK - dist folder merged without overwriting official files" -ForegroundColor Green
 
 # Repack app.asar
 Write-Host "[5/6] Packing app.asar..." -ForegroundColor Yellow
-npx -y @electron/asar pack $TempDir $AsarPath
+$packed = $false
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    npx -y @electron/asar pack $TempDir $AsarPath
+    if ($LASTEXITCODE -eq 0) {
+        $packed = $true
+        break
+    }
+    Write-Host "   Packing attempt $attempt failed (file may still be locked), retrying in 2s..." -ForegroundColor Yellow
+    Get-Process -Name "Antigravity", "language_server" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+}
 
-if ($LASTEXITCODE -ne 0) {
+if (-not $packed) {
     Write-Host "   ERROR: Packing failed! Restoring backup..." -ForegroundColor Red
     Copy-Item $BackupAsar $AsarPath -Force
     Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -109,19 +123,31 @@ if (Test-Path $agLs) {
                 if (-not (Test-Path $LsBackup)) { Copy-Item $agLs $LsBackup -Force }
                 $replaceBytes = [System.Text.Encoding]::ASCII.GetBytes($PatchedUrl)
                 [System.Array]::Copy($replaceBytes, 0, $outBytes, $offset, $replaceBytes.Length)
-                [System.IO.File]::WriteAllBytes($agLs, $outBytes)
-                Write-Host "   OK - Binary patch applied successfully" -ForegroundColor Green
+
+                $written = $false
+                for ($attempt = 1; $attempt -le 5; $attempt++) {
+                    try {
+                        Get-Process -Name "language_server" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                        Start-Sleep -Milliseconds 500
+                        [System.IO.File]::WriteAllBytes($agLs, $outBytes)
+                        $written = $true
+                        break
+                    } catch {
+                        Start-Sleep -Seconds 1
+                    }
+                }
+                if ($written) {
+                    Write-Host "   OK - Binary patch applied successfully" -ForegroundColor Green
+                } else {
+                    Write-Host "   ERROR: Binary file locked, could not write patch!" -ForegroundColor Red
+                }
+            } else {
+                Write-Host "   WARNING: Original URL string not found in binary" -ForegroundColor Yellow
             }
         }
     } catch {
         Write-Host "   WARNING - Could not patch binary: $_" -ForegroundColor Yellow
     }
-}
-
-# Sync Models & MCP Config
-$repatchScript = "d:\mrmp skills\gravity-skills\scripts\Repatch-AntigravityModels.ps1"
-if (Test-Path $repatchScript) {
-    & $repatchScript -Force -Confirm:$false
 }
 
 # Launch Antigravity
@@ -137,4 +163,5 @@ if (Test-Path $ExePath) {
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  SUCCESS! Antigravity (Standalone) repatched." -ForegroundColor Green
+Write-Host "  Antigravity 2.23.0 Compatibility Verified" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Cyan

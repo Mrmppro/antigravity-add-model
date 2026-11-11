@@ -220,7 +220,7 @@ export async function verifyModel(model: VerifiableModel, apiKey: string): Promi
   }
 
   const url = buildProbeUrl(model);
-  const headers = registry.getProviderHeaders(provider, apiKey) as Record<string, string>;
+  const headers = registry.getProviderHeaders(provider, apiKey, model as unknown as { workspaceId?: string; anthropicWorkspaceId?: string }) as Record<string, string>;
   const allowUnauthorized = model.allowUnauthorized === true;
 
   // ── Probe 1: can this model answer a plain request at all? ──
