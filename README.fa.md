@@ -13,11 +13,32 @@
 
 ---
 
-#### 🌐 انتخاب زبان / Choose Your Language / 选择语言 / 言語を選択 / Seleccionar idioma / Choisir la langue
-
-| [🇺🇸 English](README.md) | [🇮🇷 فارسی](README.fa.md) | [🇨🇳 简体中文](README.zh-CN.md) | [🇯🇵 日本語](README.ja.md) |
-| :---: | :---: | :---: | :---: |
-| [🇪🇸 Español](README.es.md) | [🇫🇷 Français](README.fr.md) | [🇩🇪 Deutsch](README.de.md) | [🇷🇺 Русский](README.ru.md) |
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="README.zh-CN.md">简体中文</a> ·
+  <a href="README.zh-TW.md">繁體中文</a> ·
+  <a href="README.ja.md">日本語</a> ·
+  <a href="README.ko.md">한국어</a> ·
+  <a href="README.tr.md">Türkçe</a> ·
+  <a href="README.ru.md">Русский</a> ·
+  <a href="README.vi.md">Tiếng Việt</a> ·
+  <a href="README.th.md">ไทย</a> ·
+  <a href="README.de.md">Deutsch</a> ·
+  <a href="README.es.md">Español</a> ·
+  <a href="README.fr.md">Français</a> ·
+  <a href="README.uk.md">Українська</a> ·
+  <a href="README.pl.md">Polski</a> ·
+  <a href="README.pt-BR.md">Português (Brasil)</a> ·
+  <a href="README.ar.md">العربية</a> ·
+  <b>فارسی</b> ·
+  <a href="README.id.md">Bahasa Indonesia</a> ·
+  <a href="README.it.md">Italiano</a> ·
+  <a href="README.el.md">Ελληνικά</a> ·
+  <a href="README.ml.md">മലയാളം</a> ·
+  <a href="README.roman-urdu.md">Roman Urdu</a> ·
+  <a href="README.ro.md">Română</a> ·
+  <a href="README.bg.md">Български</a>
+</p>
 
 ---
 
@@ -177,12 +198,7 @@ antigravity-add-model/
 ├── package.json                   # مانیفست پروژه (نسخه ۲.۳۱.۰)
 ├── README.md                      # راهنمای انگلیسی (English)
 ├── README.fa.md                   # راهنمای فارسی
-├── README.zh-CN.md                # راهنمای چینی ساده‌شده (简体中文)
-├── README.ja.md                   # راهنمای ژاپنی (日本語)
-├── README.es.md                   # راهنمای اسپانیایی (Español)
-├── README.fr.md                   # راهنمای فرانسوی (Français)
-├── README.de.md                   # راهنمای آلمانی (Deutsch)
-└── README.ru.md                   # راهنمای روسی (Русский)
+└── README.*.md                    # راهنما به ۲۴ زبان زنده دنیا (چینی، ژاپنی، کره‌ای، ترکی، روسی، عربی، اردو، اروپایی و...)
 ```
 
 ---

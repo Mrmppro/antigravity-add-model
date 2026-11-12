@@ -13,11 +13,32 @@
 
 ---
 
-#### 🌐 Choose Your Language / انتخاب زبان / 选择语言 / 言語を選択 / Seleccionar idioma / Choisir la langue
-
-| [🇺🇸 English](README.md) | [🇮🇷 فارسی](README.fa.md) | [🇨🇳 简体中文](README.zh-CN.md) | [🇯🇵 日本語](README.ja.md) |
-| :---: | :---: | :---: | :---: |
-| [🇪🇸 Español](README.es.md) | [🇫🇷 Français](README.fr.md) | [🇩🇪 Deutsch](README.de.md) | [🇷🇺 Русский](README.ru.md) |
+<p align="center">
+  <b>English</b> ·
+  <a href="README.zh-CN.md">简体中文</a> ·
+  <a href="README.zh-TW.md">繁體中文</a> ·
+  <a href="README.ja.md">日本語</a> ·
+  <a href="README.ko.md">한국어</a> ·
+  <a href="README.tr.md">Türkçe</a> ·
+  <a href="README.ru.md">Русский</a> ·
+  <a href="README.vi.md">Tiếng Việt</a> ·
+  <a href="README.th.md">ไทย</a> ·
+  <a href="README.de.md">Deutsch</a> ·
+  <a href="README.es.md">Español</a> ·
+  <a href="README.fr.md">Français</a> ·
+  <a href="README.uk.md">Українська</a> ·
+  <a href="README.pl.md">Polski</a> ·
+  <a href="README.pt-BR.md">Português (Brasil)</a> ·
+  <a href="README.ar.md">العربية</a> ·
+  <a href="README.fa.md">فارسی</a> ·
+  <a href="README.id.md">Bahasa Indonesia</a> ·
+  <a href="README.it.md">Italiano</a> ·
+  <a href="README.el.md">Ελληνικά</a> ·
+  <a href="README.ml.md">മലയാളം</a> ·
+  <a href="README.roman-urdu.md">Roman Urdu</a> ·
+  <a href="README.ro.md">Română</a> ·
+  <a href="README.bg.md">Български</a>
+</p>
 
 ---
 
@@ -363,13 +384,7 @@ antigravity-add-model/
 ├── repack.ps1                     # ASAR repack script
 ├── package.json                   # Electron app manifest (v2.31.0)
 ├── README.md                      # English documentation
-├── README.fa.md                   # Persian documentation (راهنمای فارسی)
-├── README.zh-CN.md                # Simplified Chinese documentation (简体中文)
-├── README.ja.md                   # Japanese documentation (日本語)
-├── README.es.md                   # Spanish documentation (Español)
-├── README.fr.md                   # French documentation (Français)
-├── README.de.md                   # German documentation (Deutsch)
-└── README.ru.md                   # Russian documentation (Русский)
+└── README.*.md                    # 24 languages (fa, zh-CN, zh-TW, ja, ko, tr, ru, vi, th, de, es, fr, uk, pl, pt-BR, ar, id, it, el, ml, roman-urdu, ro, bg)
 ```
 
 ## Supported Providers
