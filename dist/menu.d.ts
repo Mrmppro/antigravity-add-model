@@ -4,8 +4,7 @@ import { MenuItemConstructorOptions } from 'electron';
  */
 export declare function setupApplicationMenu(url: string): void;
 /**
- * Builds a "Connect to WSL" submenu of installed distros (null when WSL
- * isn't applicable); selecting one relaunches the app connected to it.
+ * Builds a "Connect to WSL" submenu of installed distros.
  */
 export declare function wslConnectMenuTemplate(): Promise<MenuItemConstructorOptions | null>;
 /** "Reopen Locally" item leaving WSL mode, or null when already local. */

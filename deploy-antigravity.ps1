@@ -2,7 +2,7 @@
 # Only modifies Antigravity standalone application
 
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  Antigravity (Standalone) v2.23.0 Deploy Script" -ForegroundColor Yellow
+Write-Host "  Antigravity (Standalone) v2.31.0 Deploy Script" -ForegroundColor Yellow
 Write-Host "  MRMPPRO | Custom Models, MCP, WSL & Stability Fix" -ForegroundColor Magenta
 Write-Host "============================================" -ForegroundColor Cyan
 
@@ -163,5 +163,5 @@ if (Test-Path $ExePath) {
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  SUCCESS! Antigravity (Standalone) repatched." -ForegroundColor Green
-Write-Host "  Antigravity 2.23.0 Compatibility Verified" -ForegroundColor Green
+Write-Host "  Antigravity 2.31.0 Compatibility Verified" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Cyan

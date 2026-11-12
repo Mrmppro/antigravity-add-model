@@ -1,11 +1,20 @@
-import { app, BrowserWindow, dialog, ipcMain, session, Menu } from 'electron';
+import { app, BaseWindow, BrowserWindow, dialog, ipcMain, session, Menu } from 'electron';
 import log from 'electron-log/main';
 import { registerIpcHandlers, scheduleAutoSwitchReverification } from './ipcHandlers';
+const { registerCableWebAuthnIpcHandlers } = require('./cablev2');
+const { wcvBrowserRegistry } = require('./wcvBrowserRegistry');
 import * as fs from 'fs';
-import * as path from 'path';
 import * as crypto from 'crypto';
 import * as readline from 'readline';
-import { createWindow, showQuitConfirmation, setShowQuitConfirmation, showOrCreateWindow } from './utils';
+import {
+  createWindow,
+  showQuitConfirmation,
+  setShowQuitConfirmation,
+  showOrCreateWindow,
+  getHubWindows,
+  getHubWebContents,
+  getFocusedHubWindow,
+} from './utils';
 import {
   startAndMonitorLanguageServer,
   getLsPort,
@@ -14,18 +23,21 @@ import {
   LS_BINARY,
   setupLocalCertTrust,
   getLsProcess,
+  prefetchShellEnv,
 } from './languageServer';
 import { initAutoUpdater, getHostUpdateStatus, applyHostUpdate } from './updater';
 import { startHostBridgeServer, HostBridgeServerHandle } from './hostBridgeServer';
 import { WINDOW_ORIGIN, DYNAMIC_PORT } from './constants';
 import { createTray, insertTrayMenuItem } from './tray';
 import { StorageManager } from './storage';
-import { getAppStoragePath, getLsLogPath } from './paths';
+const { configureSessionDeviceChooser } = require('./deviceChooser');
+import { getAppStoragePath, getLsLogPath, getActivePortFilePath, tightenActivePortPermissions } from './paths';
 import { setupApplicationMenu, wslConnectMenuTemplate, wslReopenLocallyTemplate } from './menu';
 import { registerCustomSchemes, registerCustomSchemeHandlers } from './customScheme';
 import { DEFAULTS, SettingsService, SettingKey } from './services/settingsService';
 import { maybeShowIdeInstallWizard } from './ideInstall';
 import { createProvisionSplash, ProvisionSplashHandle } from './provisionSplash';
+import * as path from 'path';
 import {
   readPersistedWslDistro,
   persistWslDistro,
@@ -34,6 +46,17 @@ import {
   ensureServerInstalled,
   WSL_STATE_FILE,
 } from './wsl';
+const { configureWebviewSessionProxy, preconfigureWebviewPartitionProxies } = require('./beyondcorpPac');
+const { isScriptJailSession } = require('./scriptJail');
+const {
+  configureSessionWebAuthn,
+  configurePlatformWebAuthn,
+  attachWebviewWebAuthnUserActivationTracking,
+} = require('./webauthn');
+const { configureSessionPromptPreload } = require('./guestPromptController');
+const { configureWebviewBrowserContents } = require('./webviewBrowser');
+import { flushTrackedWindowState } from './windowState';
+const { closeAllBrowserSessions } = require('./browserEngine/browserEngine');
 
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -52,16 +75,12 @@ let hostBridgeServer: HostBridgeServerHandle | undefined;
 // ─── Config ────────────────────────────────────────────────────────────────
 
 // Driven by ELECTRON_OZONE_PLATFORM_HINT=headless env var.
-// This single env var both prevents GTK from crashing (Electron 33+)
-// and tells our code to skip createWindow().
 const HEADLESS = process.env.ELECTRON_OZONE_PLATFORM_HINT === 'headless';
 
 // When set, skip LS startup and load this URL directly (for dev iteration).
 const DEV_URL = process.env.DEV_URL;
 
 // WSL distro to provision and launch the LS in (Windows only, '' = local).
-// Precedence: --wsl-distro switch (empty value forces local) >
-// ANTIGRAVITY_WSL_DISTRO env var > distro persisted from the last session.
 function resolveStartupWslDistro(): string {
   if (process.platform !== 'win32') {
     return '';
@@ -76,6 +95,9 @@ function resolveStartupWslDistro(): string {
 }
 
 let WSL_DISTRO = resolveStartupWslDistro();
+if (!DEV_URL) {
+  prefetchShellEnv();
+}
 
 /** True if `distro` is currently registered in WSL (false on wsl.exe errors). */
 async function wslDistroExists(distro: string): Promise<boolean> {
@@ -97,14 +119,22 @@ if (HEADLESS) {
 if (!app.commandLine.hasSwitch('remote-debugging-port')) {
   app.commandLine.appendSwitch('remote-debugging-port', '0');
 }
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
+app.commandLine.appendSwitch('disable-features', 'FedCm');
+
+const disabledFeatures = app.commandLine.getSwitchValue('disable-features');
+app.commandLine.appendSwitch(
+  'disable-features',
+  [disabledFeatures, 'CalculateNativeWinOcclusion'].filter(Boolean).join(',')
+);
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 // ─── Application Lifecycle ─────────────────────────────────────────────────
 
 let pendingDeepLink: string | null = null;
 
 function handleDeepLink(url: string): void {
-  const wins = BrowserWindow.getAllWindows();
-  // This block handles deep links when windows are already open.
+  const wins = getHubWindows();
   if (wins.length > 0) {
     if (wins[0].isMinimized()) {
       wins[0].restore();
@@ -112,9 +142,25 @@ function handleDeepLink(url: string): void {
     wins[0].show();
     wins[0].focus();
     app.focus({ steal: true });
-    wins[0].webContents.send('deep-link', url);
+    const hubContents = getHubWebContents(wins[0]);
+    if (
+      !hubContents ||
+      hubContents.isDestroyed?.() ||
+      hubContents.isLoadingMainFrame?.()
+    ) {
+      pendingDeepLink = url;
+    } else {
+      hubContents.send('deep-link', url);
+    }
   } else {
     pendingDeepLink = url;
+    if (!HEADLESS && hasStartedMainApplication) {
+      createWindow(
+        DEV_URL ?? `${WINDOW_ORIGIN}:${getLsPort()}/`,
+        storageManager
+      );
+      app.focus({ steal: true });
+    }
   }
 }
 
@@ -123,11 +169,17 @@ const PROTOCOL = app
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, '-')
   .replace(/^-|-$/g, '');
-if (!app.isDefaultProtocolClient(PROTOCOL)) {
-  app.setAsDefaultProtocolClient(PROTOCOL);
+
+const protocolClientArgs =
+  process.defaultApp && process.argv.length >= 2
+    ? [process.execPath, [path.resolve(process.argv[1])]]
+    : [];
+
+if (!app.isDefaultProtocolClient(PROTOCOL, ...(protocolClientArgs as any))) {
+  app.setAsDefaultProtocolClient(PROTOCOL, ...(protocolClientArgs as any));
 }
 
-app.on('second-instance', (_event, commandLine: string[]) => {
+app.on('second-instance', (_event, commandLine) => {
   if (!HEADLESS && hasStartedMainApplication) {
     showOrCreateWindow(getLsPort(), storageManager);
     app.focus({ steal: true });
@@ -145,81 +197,101 @@ app.on('open-url', (event, url) => {
   handleDeepLink(url);
 });
 
+app.on('session-created', (targetSession) => {
+  if (isScriptJailSession(targetSession)) {
+    return;
+  }
+  configureSessionWebAuthn(targetSession);
+  configureSessionPromptPreload(targetSession);
+});
+
+app.on('web-contents-created', (_event, contents) => {
+  if (isScriptJailSession(contents.session)) {
+    return;
+  }
+  configureSessionDeviceChooser(contents.session);
+  configureSessionWebAuthn(contents.session);
+  configureSessionPromptPreload(contents.session);
+  if (contents.getType?.() !== 'webview') {
+    return;
+  }
+  attachWebviewWebAuthnUserActivationTracking(contents);
+  configureWebviewBrowserContents(contents);
+  void configureWebviewSessionProxy(contents.session);
+});
+
 /**
  * App entry point. Runs once Electron has finished initializing.
- * Validates the LS binary, frees the port if needed, spawns the LS,
- * and opens the initial browser window.
  */
 app
   .whenReady()
   .then(async () => {
-    // Initialize electron-log and override console
-    log.initialize();
+    log.initialize({
+      includeFutureSessions: false,
+    });
     Object.assign(console, log.functions);
+
+    tightenActivePortPermissions(app.getPath('userData'), getActivePortFilePath());
 
     const storagePath = getAppStoragePath();
     storageManager = new StorageManager(storagePath, DEFAULTS);
     settingsService = new SettingsService(storageManager);
 
-    // Handle deep link URL from command line arguments (All platforms)
     const deepLinkFromArg = process.argv.find((arg) => arg.startsWith(`${PROTOCOL}://`));
     if (deepLinkFromArg) {
       console.log('Launched with deep link:', deepLinkFromArg);
       pendingDeepLink = deepLinkFromArg;
     }
 
-    // Register IPC handlers
     registerIpcHandlers(storageManager);
-    // Re-check Auto Switch models that have gone stale. Detached so a slow or
-    // unreachable provider can never hold up launch.
-    scheduleAutoSwitchReverification();
+
     ipcMain.handle('deep-link:get-stored', () => {
       const link = pendingDeepLink;
-      pendingDeepLink = null; // Clear after read
+      pendingDeepLink = null;
       return link;
     });
 
-    // Handle requests coming from custom schemes
     registerCustomSchemeHandlers();
 
-    // Intercept and block SetCloudCodeURL requests to prevent the frontend
-    // from overriding the local proxy endpoint.
+    // Re-check Auto Switch models that have gone stale.
+    scheduleAutoSwitchReverification();
+
+    app.setAboutPanelOptions({ applicationVersion: app.getVersion() });
+    void getLsCL().then((cl) => {
+      if (cl) {
+        app.setAboutPanelOptions({
+          applicationVersion: app.getVersion(),
+          version: cl,
+        });
+      }
+    });
+
+    if (!HEADLESS) {
+      await maybeShowIdeInstallWizard(storageManager);
+    }
+
+    await preconfigureWebviewPartitionProxies();
+
+    configurePlatformWebAuthn({
+      registerCableIpc: () =>
+        registerCableWebAuthnIpcHandlers({
+          resolveWcvTab: (id: any) => wcvBrowserRegistry.resolveDeviceChooserHost(id),
+        }),
+    });
+    configureSessionWebAuthn(session.defaultSession);
+
     // Redirect GetAvailableModels to our proxy so custom models are injected.
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
-      if (details.url.includes('SetCloudCodeURL')) {
-        console.log(`[Proxy Intercept] Blocked SetCloudCodeURL: ${details.url}`);
-        callback({ cancel: true });
-        return;
-      }
       if (details.url.includes('LanguageServerService/GetAvailableModels')) {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
         const proxyPort = (require('./proxy').getProxyPort as () => number)();
         if (proxyPort > 0) {
           const redirectTarget = `http://127.0.0.1:${proxyPort}/GetAvailableModels?ls=${encodeURIComponent(details.url)}`;
           console.log(`[Proxy Intercept] Redirecting GetAvailableModels to proxy: ${redirectTarget}`);
-          (callback as (opts: { cancel?: boolean; redirectURL?: string }) => void)({ redirectURL: redirectTarget });
-          return;
+          return callback({ redirectURL: redirectTarget });
         }
       }
-      if (details.url.includes('CloudCode') || details.url.includes('LanguageServerService')) {
-        console.log(`[Proxy Intercept] Request URL: ${details.url}`);
-      }
-      callback({});
+      return callback({});
     });
-
-    // Set About panel options with LS CL
-    const cl = await getLsCL();
-    app.setAboutPanelOptions({
-      applicationName: 'Antigravity',
-      applicationVersion: app.getVersion(),
-      version: cl || undefined,
-    });
-
-    // Pre-onboarding: check if we should offer to re-install the IDE.
-    // This runs before the LS starts so we can show a standalone wizard.
-    if (!HEADLESS) {
-      await maybeShowIdeInstallWizard(storageManager);
-    }
 
     if (DEV_URL) {
       console.log('Starting in dev mode with URL:', DEV_URL);
@@ -229,7 +301,7 @@ app
     }
 
     if (!WSL_DISTRO && !fs.existsSync(LS_BINARY)) {
-      const msg = `language_server binary not found at:\n${LS_BINARY}\n\nPlease build/set a valid location.`;
+      const msg = `language_server binary not found at:\n${LS_BINARY}\n\nPlease build set a valid location.`;
       if (HEADLESS) {
         console.error('ERROR:', msg);
       } else {
@@ -239,16 +311,12 @@ app
       return;
     }
 
-    // In WSL mode, make sure the matching server version is installed in the
-    // distro before launching.
     let wslOptions: { distro: string; binaryPath: string } | undefined;
     if (WSL_DISTRO && !(await wslDistroExists(WSL_DISTRO))) {
-      // The distro was removed since the last session (e.g. `wsl
-      // --unregister`). Open locally instead of failing provisioning.
       console.warn(`[WSL] Distro "${WSL_DISTRO}" is not installed; opening locally instead.`);
       persistWslDistro(path.join(app.getPath('userData'), WSL_STATE_FILE), '');
       if (!HEADLESS) {
-        void dialog.showMessageBox({
+        void dialog.showMessageBox(null, {
           type: 'warning',
           title: 'WSL distro not found',
           message: `The WSL distro "${WSL_DISTRO}" is no longer installed.`,
@@ -257,10 +325,9 @@ app
       }
       WSL_DISTRO = '';
     }
+
     if (WSL_DISTRO) {
       setActiveWslDistro(WSL_DISTRO);
-      // Created lazily on the first status update, so it only appears when
-      // provisioning actually has work to do (first launch per version).
       let splash: ProvisionSplashHandle | undefined;
       try {
         const binaryPath = await ensureServerInstalled(
@@ -272,11 +339,11 @@ app
               splash ??= createProvisionSplash(WSL_DISTRO);
               splash.setStatus(status);
             }
-          },
+          }
         );
         wslOptions = { distro: WSL_DISTRO, binaryPath };
-      } catch (err) {
-        const msg = `Failed to install the server into WSL distro "${WSL_DISTRO}":\n${(err as Error).message}`;
+      } catch (err: any) {
+        const msg = `Failed to install the server into WSL distro "${WSL_DISTRO}":\n${err.message}`;
         persistWslDistro(path.join(app.getPath('userData'), WSL_STATE_FILE), '');
         if (HEADLESS) {
           console.error('ERROR:', msg);
@@ -293,18 +360,17 @@ app
     const csrf = crypto.randomUUID();
     console.log(`Starting app (v${app.getVersion()}) with dynamic port…`);
 
-    // Start host bridge server for language server update queries
     try {
       hostBridgeServer = await startHostBridgeServer({
         getUpdateStatus: getHostUpdateStatus,
         applyUpdate: applyHostUpdate,
       });
       console.log(`Host bridge server listening on ${hostBridgeServer.url}`);
-    } catch (err) {
-      console.error('Failed to start host bridge server:', (err as Error).message);
+    } catch (err: any) {
+      console.error('Failed to start host bridge server:', err.message);
     }
 
-    let handle: { port: number };
+    let handle: any;
     const targetPort = Number(process.env.JETSKI_LS_PORT) || DYNAMIC_PORT;
     try {
       handle = await startAndMonitorLanguageServer(targetPort, csrf, {
@@ -312,15 +378,20 @@ app
         wsl: wslOptions,
         hostBridgeUrl: hostBridgeServer?.url,
         hostBridgeToken: hostBridgeServer?.token,
-        onPortChanged: (newPort: number) => {
+        onPortChanged: (newPort) => {
           const newUrl = `${WINDOW_ORIGIN}:${newPort}/`;
-          console.log(`[Auto-Restart] Port updated: ${newUrl}`);
-          // Apply cert trust without force-reloading windows (preserves active jobs & UI state)
+          console.log(`[Auto-Restart] Port changed! Reloading all windows with URL: ${newUrl}`);
           setupLocalCertTrust();
+          if (!HEADLESS) {
+            const windows = getHubWindows();
+            for (const win of windows) {
+              void win.loadURL(newUrl);
+            }
+          }
         },
       });
-    } catch (err) {
-      const msg = (err as Error).message;
+    } catch (err: any) {
+      const msg = err.message;
       if (HEADLESS) {
         console.error('Startup failed:', msg);
       } else {
@@ -338,7 +409,6 @@ app
     console.log('='.repeat(60) + '\n');
 
     if (HEADLESS) {
-      // In headless mode, forward stdin to the Language Server to allow interaction via terminal.
       const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout,
@@ -354,19 +424,20 @@ app
       });
     }
 
-    // Initial window — opened once after the LS has successfully started.
     if (!HEADLESS) {
       setupApplicationMenu(url);
       createWindow(url, storageManager);
+
       if (app.dock) {
         const dockMenu = Menu.buildFromTemplate([
           {
             label: 'New Window',
-            click: () => createWindow(url, storageManager),
+            click: () => createWindow(url, storageManager, { cascade: true }),
           },
         ]);
         app.dock.setMenu(dockMenu);
       }
+
       createTray(
         [
           {
@@ -376,27 +447,27 @@ app
           },
           { type: 'separator' },
           {
-            label: `Open ${app.getName()}`,
-            click: () => showOrCreateWindow(getLsPort(), storageManager),
-          },
-          {
             label: '⚙ Manage Custom Models (Ctrl+Alt+M)',
             click: () => {
-              const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
-              if (win) {
+              const wins = getHubWindows();
+              if (wins.length > 0) {
+                const win = wins[0];
+                if (win.isMinimized()) win.restore();
                 win.show();
                 win.focus();
-                win.webContents.send('open-custom-models-modal');
-              } else {
-                showOrCreateWindow(getLsPort(), storageManager);
+                const contents = getHubWebContents(win);
+                contents?.send('open-custom-models-modal');
               }
             },
           },
           { type: 'separator' },
           {
+            label: `Open ${app.getName()}`,
+            click: () => showOrCreateWindow(getLsPort(), storageManager),
+          },
+          {
             label: 'Quit',
             click: () => {
-              // Triggers 'before-quit' to run graceful cleanup without confirmation.
               app.quit();
             },
           },
@@ -404,34 +475,28 @@ app
         () => {
           showOrCreateWindow(getLsPort(), storageManager);
           app.focus({ steal: true });
-        },
+        }
       );
-      // The app menu bar isn't reachable on Windows (hidden title bar), so
-      // the tray menu also gets the "Connect to WSL" entry.
+
       void wslConnectMenuTemplate().then((wslItem) => {
         if (wslItem) {
-          insertTrayMenuItem(2, wslItem);
+          insertTrayMenuItem(3, wslItem);
           const reopen = wslReopenLocallyTemplate();
           if (reopen) {
-            insertTrayMenuItem(3, reopen);
+            insertTrayMenuItem(4, reopen);
           }
         }
       });
     }
 
-    // Start checking for app updates.
     initAutoUpdater(HEADLESS, settingsService);
     hasStartedMainApplication = true;
   })
-  .catch(() => {
+  .catch((err) => {
+    console.error('Application failed to start:', err);
     hasStartedMainApplication = true;
   });
 
-/**
- * Fired when all windows have been closed.
- * On macOS the app (and LS) stay alive so the user can re-open via the tray.
- * On all other platforms, shut down the LS and quit.
- */
 app.on('window-all-closed', async () => {
   if (isQuitting) {
     return;
@@ -441,10 +506,7 @@ app.on('window-all-closed', async () => {
   }
   const runInBackground = await settingsService.getSetting(SettingKey.RUN_IN_BACKGROUND);
   if (!runInBackground) {
-    // Triggers 'before-quit' to run graceful cleanup without confirmation.
     app.quit();
-  } else {
-    app.dock?.hide();
   }
 });
 
@@ -460,11 +522,6 @@ async function closeHostBridgeServer(): Promise<void> {
   hostBridgeServer = undefined;
 }
 
-/**
- * Fired just before the app quits (e.g. Cmd+Q on macOS, or after
- * window-all-closed on non-macOS). Ensures the LS is terminated even if
- * window-all-closed didn't handle it (e.g. on macOS quit via menu).
- */
 app.on('before-quit', async (event) => {
   if (isQuitting) {
     return;
@@ -472,25 +529,37 @@ app.on('before-quit', async (event) => {
   if (!showQuitConfirmation) {
     event.preventDefault();
     isQuitting = true;
-    // Destroy all windows to terminate renderers and release keep-alive sockets
-    const windows = BrowserWindow.getAllWindows();
+    flushTrackedWindowState(getFocusedHubWindow());
+
+    const windows = [
+      ...new Set([...getHubWindows(), ...BrowserWindow.getAllWindows()]),
+    ];
     for (const win of windows) {
       win.destroy();
     }
-    // Close all active connections and kill the language server in parallel
+
     await Promise.all([
-      session.defaultSession.closeAllConnections().catch((err: Error) => {
+      session.defaultSession.closeAllConnections().catch((err) => {
         console.error('Failed to close session connections:', err);
       }),
       killLanguageServer(),
+      closeAllBrowserSessions().catch((err) => {
+        console.error('Failed to close browser sessions:', err);
+      }),
     ]);
+
     await closeHostBridgeServer();
     app.quit();
     return;
   }
-  // Show a confirmation dialog before quitting
+
   event.preventDefault();
-  const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+  const hubWins = getHubWindows();
+  const focusedWindow = getFocusedHubWindow() ?? BrowserWindow.getFocusedWindow();
+  const win =
+    (focusedWindow && hubWins.includes(focusedWindow) ? focusedWindow : undefined) ||
+    hubWins[0];
+
   const options: Electron.MessageBoxOptions = {
     type: 'question',
     buttons: ['Cancel', 'Quit'],
@@ -504,21 +573,14 @@ app.on('before-quit', async (event) => {
   if (win) {
     void dialog.showMessageBox(win, options).then((result) => {
       if (result.response === 1) {
-        // Quit - this will retrigger 'before-quit'
         app.quit();
       }
     });
   }
 });
 
-/**
- * Fired when the app is re-activated (e.g. clicking the dock icon on macOS).
- * Re-opens a window if none are currently open.
- */
 app.on('activate', () => {
-  // On Mac, re-open a window when the user clicks the dock
-  // icon and no windows are open.
-  if (!HEADLESS && BrowserWindow.getAllWindows().length === 0) {
+  if (!HEADLESS && getHubWindows().length === 0) {
     const url = DEV_URL ?? `${WINDOW_ORIGIN}:${getLsPort()}/`;
     createWindow(url, storageManager);
   }

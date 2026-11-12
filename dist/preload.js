@@ -86,6 +86,48 @@ const deepLinkAPI = {
 const agentAPI = {
     updateActiveAgentCount: (count) => electron_1.ipcRenderer.invoke('agent:update-active-count', count),
 };
+function subscribeIpcChannel(channel, callback) {
+    const handler = (_event, payload) => {
+        callback(payload);
+    };
+    electron_1.ipcRenderer.on(channel, handler);
+    return () => {
+        electron_1.ipcRenderer.removeListener(channel, handler);
+    };
+}
+const wcvBrowserAPI = {
+    acquire: (req) => electron_1.ipcRenderer.invoke('wcv:acquire', req),
+    show: (tabKey, boundsCss) => electron_1.ipcRenderer.invoke('wcv:show', tabKey, boundsCss),
+    hide: (tabKey) => electron_1.ipcRenderer.invoke('wcv:hide', tabKey),
+    setBounds: (tabKey, boundsCss) => {
+        electron_1.ipcRenderer.sendSync?.('wcv:set-bounds-sync', tabKey, boundsCss);
+        return Promise.resolve();
+    },
+    setThemeColor: (color) => electron_1.ipcRenderer.invoke('wcv:set-theme-color', color),
+    setPinned: (tabKey, pinned) => electron_1.ipcRenderer.invoke('wcv:set-pinned', tabKey, pinned),
+    setAgentControlling: (tabKey, active) => electron_1.ipcRenderer.invoke('wcv:set-agent-controlling', tabKey, active),
+    setOverlayActive: (tabKey, active) => electron_1.ipcRenderer.invoke('wcv:set-overlay-active', tabKey, active),
+    setPortalOverlayOpen: (open) => electron_1.ipcRenderer.invoke('wcv:set-portal-overlay-open', open),
+    elevate: (tabKey, reason, focusBrowser) => electron_1.ipcRenderer.invoke('wcv:elevate', tabKey, reason, focusBrowser),
+    setDragOver: (tabKey, active) => electron_1.ipcRenderer.invoke('wcv:set-drag-over', tabKey, active),
+    demote: (tabKey, reason) => electron_1.ipcRenderer.invoke('wcv:demote', tabKey, reason),
+    navigate: (tabKey, url) => electron_1.ipcRenderer.invoke('wcv:navigate', tabKey, url),
+    control: (tabKey, action) => electron_1.ipcRenderer.invoke('wcv:control', tabKey, action),
+    sendMouse: (tabKey, params, coordSpace) => coordSpace !== undefined
+        ? electron_1.ipcRenderer.invoke('wcv:send-mouse', tabKey, params, coordSpace)
+        : electron_1.ipcRenderer.invoke('wcv:send-mouse', tabKey, params),
+    sendKey: (tabKey, params) => electron_1.ipcRenderer.invoke('wcv:send-key', tabKey, params),
+    insertText: (tabKey, text) => electron_1.ipcRenderer.invoke('wcv:insert-text', tabKey, text),
+    setViewportSize: (tabKey, size) => electron_1.ipcRenderer.invoke('wcv:set-viewport-size', tabKey, size),
+    capturePage: (tabKey) => electron_1.ipcRenderer.invoke('wcv:capture-page', tabKey),
+    dispose: (tabKey) => electron_1.ipcRenderer.invoke('wcv:dispose', tabKey),
+    onGuestEvent: (cb) => subscribeIpcChannel('wcv:guest-event', cb),
+    onZOrderChanged: (cb) => subscribeIpcChannel('wcv:z-order-changed', cb),
+    onShortcutForwarded: (cb) => subscribeIpcChannel('wcv:shortcut-forwarded', cb),
+    onCursorChanged: (cb) => subscribeIpcChannel('wcv:cursor-changed', cb),
+};
+let deviceChooserSubscriberCount = 0;
+let promptRequestSubscriberCount = 0;
 const electronNativeAPI = {
     getZoomLevel: () => electron_1.webFrame.getZoomFactor(),
     getPathForFile: (file) => electron_1.webUtils.getPathForFile(file),
@@ -109,6 +151,141 @@ const electronNativeAPI = {
     revealInFilePicker: (path) => electron_1.ipcRenderer.invoke('shell:reveal-in-file-picker', path),
     showContextMenu: (items) => electron_1.ipcRenderer.invoke('window:show-context-menu', items),
     closeContextMenu: () => electron_1.ipcRenderer.invoke('window:close-context-menu'),
+    onWebviewDeviceChooserEvent: (callback) => {
+        if (++deviceChooserSubscriberCount === 1) {
+            electron_1.ipcRenderer.send('webview:device-chooser-subscriber-state', true);
+        }
+        const unsubscribe = subscribeIpcChannel('webview:device-chooser-event', callback);
+        let active = true;
+        return () => {
+            if (!active) {
+                return;
+            }
+            active = false;
+            unsubscribe();
+            if (--deviceChooserSubscriberCount === 0) {
+                electron_1.ipcRenderer.send('webview:device-chooser-subscriber-state', false);
+            }
+        };
+    },
+    respondWebviewDeviceChooser: (requestId, resolution) => electron_1.ipcRenderer.invoke('webview:device-chooser-response', requestId, resolution),
+    getWebviewMemoryUsage: (webContentsIds) => electron_1.ipcRenderer.invoke('webview:get-memory-usage', webContentsIds),
+    getDefaultDownloadDirectory: () => electron_1.ipcRenderer.invoke('dialog:get-default-download-dir'),
+    executeJavaScriptInIsolatedWorld: (wcId, worldId, code) => electron_1.ipcRenderer.invoke('webview:execute-js-isolated-world', wcId, worldId, code),
+    scriptJailProtocol: 2,
+    listWebviewFrames: (wcId) => electron_1.ipcRenderer.invoke('webview:list-frames', wcId),
+    executeJavaScriptInFrameIsolatedWorld: (wcId, frameId, code, expectedOrigin) => electron_1.ipcRenderer.invoke('webview:execute-js-frame-isolated-world', wcId, frameId, code, expectedOrigin),
+    runScriptInJail: (req) => electron_1.ipcRenderer.invoke('script-jail:run', req),
+    abortScriptJail: (jailId) => electron_1.ipcRenderer.invoke('script-jail:abort', jailId),
+    warmScriptJail: () => electron_1.ipcRenderer.invoke('script-jail:warm'),
+    subscribeWebviewSecurityState: (webContentsId, callback) => {
+        let latestSeq = 0;
+        let subscribed = true;
+        const deliver = (state) => {
+            if (!subscribed ||
+                !state ||
+                state.webContentsId !== webContentsId ||
+                state.seq <= latestSeq) {
+                return;
+            }
+            latestSeq = state.seq;
+            callback(state);
+        };
+        const handler = (_event, state) => {
+            deliver(state);
+        };
+        electron_1.ipcRenderer.on('webview:security-state-changed', handler);
+        void electron_1.ipcRenderer
+            .invoke('webview:get-security-state', webContentsId)
+            .then(deliver, () => undefined);
+        return () => {
+            subscribed = false;
+            electron_1.ipcRenderer.removeListener('webview:security-state-changed', handler);
+        };
+    },
+    allowWebviewCertificate: (webContentsId, url) => electron_1.ipcRenderer.invoke('webview:allow-certificate', webContentsId, url),
+    clearWebviewSiteData: (webContentsId, origin) => electron_1.ipcRenderer.invoke('webview:clear-site-data', webContentsId, origin),
+    onWebviewOpenNewTab: (callback) => {
+        const handler = (_event, url, webContentsId) => {
+            callback(url, webContentsId);
+        };
+        electron_1.ipcRenderer.on('webview:open-new-tab', handler);
+        return () => {
+            electron_1.ipcRenderer.removeListener('webview:open-new-tab', handler);
+        };
+    },
+    setWebviewDownloadDirectory: (webContentsId, downloadDir) => electron_1.ipcRenderer.invoke('webview:set-download-dir', webContentsId, downloadDir),
+    setWebviewAgentControlled: (webContentsId, active) => electron_1.ipcRenderer.invoke('webview:set-agent-controlled', webContentsId, active),
+    openWebviewDownload: (downloadId) => electron_1.ipcRenderer.invoke('webview:open-download', downloadId),
+    showWebviewDownloadInFolder: (downloadId) => electron_1.ipcRenderer.invoke('webview:show-download-in-folder', downloadId),
+    cancelWebviewDownload: (downloadId) => electron_1.ipcRenderer.invoke('webview:cancel-download', downloadId),
+    resolveWebviewDownload: (downloadId, approve) => electron_1.ipcRenderer.invoke('webview:resolve-download', downloadId, approve),
+    selectDownloadDirectory: (defaultPath) => electron_1.ipcRenderer.invoke('dialog:select-download-dir', defaultPath),
+    onWebviewFaviconUpdated: (callback) => {
+        const handler = (_event, payload) => {
+            callback(payload);
+        };
+        electron_1.ipcRenderer.on('webview:favicon-updated', handler);
+        return () => {
+            electron_1.ipcRenderer.removeListener('webview:favicon-updated', handler);
+        };
+    },
+    onWebviewDownloadProgress: (callback) => {
+        const handler = (_event, payload) => {
+            callback(payload);
+        };
+        electron_1.ipcRenderer.on('webview:download-progress', handler);
+        return () => {
+            electron_1.ipcRenderer.removeListener('webview:download-progress', handler);
+        };
+    },
+    setWebviewDialogPolicy: (webContentsId, policy) => electron_1.ipcRenderer.invoke('webview:set-dialog-policy', webContentsId, policy),
+    handleWebviewDialog: (webContentsId, decision) => electron_1.ipcRenderer.invoke('webview:handle-javascript-dialog', webContentsId, decision),
+    onWebviewDialogOpening: (callback) => subscribeIpcChannel('webview:javascript-dialog-opening', callback),
+    getWebviewNetworkRequests: (webContentsId) => electron_1.ipcRenderer.invoke('webview:get-network-requests', webContentsId),
+    clearWebviewNetworkRequests: (webContentsId) => electron_1.ipcRenderer.invoke('webview:clear-network-requests', webContentsId),
+    onWebviewNetworkRequest: (callback) => subscribeIpcChannel('webview:network-request-updated', callback),
+    onWebviewPromptRequest: (callback) => {
+        promptRequestSubscriberCount += 1;
+        if (promptRequestSubscriberCount === 1) {
+            electron_1.ipcRenderer.send('webview:prompt-subscriber-state', true);
+        }
+        const unsubscribe = subscribeIpcChannel('webview:prompt-request', callback);
+        let active = true;
+        return () => {
+            if (!active) {
+                return;
+            }
+            active = false;
+            unsubscribe();
+            promptRequestSubscriberCount = Math.max(0, promptRequestSubscriberCount - 1);
+            if (promptRequestSubscriberCount === 0) {
+                electron_1.ipcRenderer.send('webview:prompt-subscriber-state', false);
+            }
+        };
+    },
+    respondWebviewPrompt: (promptId, value) => electron_1.ipcRenderer.invoke('webview:prompt-response', promptId, value),
+    setWebviewFileChooserPolicy: (webContentsId, policy) => electron_1.ipcRenderer.invoke('webview:set-file-chooser-policy', webContentsId, policy),
+    handleWebviewFileChooser: (webContentsId, decision) => electron_1.ipcRenderer.invoke('webview:handle-file-chooser', webContentsId, decision),
+    setWebviewInputFiles: (webContentsId, request) => electron_1.ipcRenderer.invoke('webview:set-input-files', webContentsId, request),
+    resolveWebviewUploadFiles: (request) => electron_1.ipcRenderer.invoke('webview:resolve-upload-files', request),
+    onWebviewFileChooserOpened: (callback) => subscribeIpcChannel('webview:file-chooser-opened', callback),
+    setWebviewWebMcpEnabled: (enabled) => electron_1.ipcRenderer.invoke('webview:webmcp-set-enabled', enabled),
+    listWebviewWebMcpTools: (webContentsId, origin) => electron_1.ipcRenderer.invoke('webview:webmcp-list-tools', webContentsId, origin),
+    callWebviewWebMcpTool: (webContentsId, origin, params) => electron_1.ipcRenderer.invoke('webview:webmcp-call-tool', webContentsId, origin, params),
+    cancelWebviewWebMcpToolCall: (webContentsId, callId) => electron_1.ipcRenderer.invoke('webview:webmcp-cancel-tool-call', webContentsId, callId),
+    wcvBrowser: wcvBrowserAPI,
+};
+electron_1.ipcRenderer.on('agy-script-jail:port', (event, payload) => {
+    window.postMessage({
+        type: 'agy-script-jail-port',
+        jailId: payload?.jailId,
+    }, '*', event.ports);
+});
+const desktopMicAPI = {
+    getAccessStatus: () => electron_1.ipcRenderer.invoke('mic:get-access-status'),
+    requestAccess: () => electron_1.ipcRenderer.invoke('mic:request-access'),
+    openSystemPreferences: () => electron_1.ipcRenderer.invoke('mic:open-system-preferences'),
 };
 const ideAPI = {
     isInstalled: () => electron_1.ipcRenderer.invoke('ide:is-installed'),
@@ -130,6 +307,7 @@ electron_1.contextBridge.exposeInMainWorld('agent', agentAPI);
 electron_1.contextBridge.exposeInMainWorld('electronNative', electronNativeAPI);
 electron_1.contextBridge.exposeInMainWorld('ide', ideAPI);
 electron_1.contextBridge.exposeInMainWorld('wsl', wslAPI);
+electron_1.contextBridge.exposeInMainWorld('desktopMic', desktopMicAPI);
 // ─── Custom Models UI Modal (Zero DOM Pollution / On-Demand Only) ───────────
 const PROVIDER_ICONS = {
     openai: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 17l10 5 10-5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 12l10 5 10-5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`,
@@ -1089,4 +1267,189 @@ electron_1.ipcRenderer.on('open-custom-models-modal', () => {
 // Global window helpers (callable from DevTools or menu without modifying DOM)
 window.openCustomModelsModal = openManageModelsModal;
 window.openAddModelModal = openAddModelModal;
+const HEX6_RE = /^#[0-9a-fA-F]{6}$/;
+const HEX3_RE = /^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/;
+const RGB_RE = /^rgba?\(\s*(\d{1,3})\s*(?:,|\s)\s*(\d{1,3})\s*(?:,|\s)\s*(\d{1,3})(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/i;
+const CSS_VAR_RE = /^var\(\s*(--[^,\s)]+)(?:\s*,\s*(.+))?\)$/;
+function parseCssColorToHex6(raw) {
+    const s = raw.trim();
+    if (!s) {
+        return undefined;
+    }
+    if (HEX6_RE.test(s)) {
+        return s.toUpperCase();
+    }
+    const h3 = HEX3_RE.exec(s);
+    if (h3) {
+        return `#${h3[1]}${h3[1]}${h3[2]}${h3[2]}${h3[3]}${h3[3]}`.toUpperCase();
+    }
+    const rgb = RGB_RE.exec(s);
+    if (!rgb) {
+        return undefined;
+    }
+    if (rgb[4] !== undefined) {
+        const a = rgb[4].endsWith('%') ? Number(rgb[4].slice(0, -1)) / 100 : Number(rgb[4]);
+        if (!Number.isFinite(a) || a < 1) {
+            return undefined;
+        }
+    }
+    const h2 = (v) => Math.max(0, Math.min(255, Math.round(Number(v))))
+        .toString(16)
+        .padStart(2, '0');
+    return `#${h2(rgb[1])}${h2(rgb[2])}${h2(rgb[3])}`.toUpperCase();
+}
+function installHubSurfaceThemeAutoSync() {
+    const g = globalThis;
+    if (!g.document || typeof g.getComputedStyle !== 'function' || (g.top && g.self && g.top !== g.self)) {
+        return;
+    }
+    let lastSyncedHex = '';
+    let observedRoot = null;
+    const syncNow = () => {
+        const rootEl = g.document?.documentElement;
+        if (!rootEl) {
+            return;
+        }
+        if (observedRoot !== rootEl && typeof g.MutationObserver === 'function') {
+            observedRoot = rootEl;
+            new g.MutationObserver(syncNow).observe(rootEl, {
+                attributes: true,
+                attributeFilter: ['style', 'class', 'data-theme'],
+            });
+        }
+        const style = g.getComputedStyle?.(rootEl);
+        let cur = style?.getPropertyValue?.('--background')?.trim() ?? '';
+        for (let depth = 0; depth < 3 && cur; depth++) {
+            const hex = parseCssColorToHex6(cur);
+            if (hex) {
+                cur = hex;
+                break;
+            }
+            const m = CSS_VAR_RE.exec(cur);
+            if (!m) {
+                break;
+            }
+            cur = style?.getPropertyValue?.(m[1])?.trim() || m[2]?.trim() || '';
+        }
+        const hex = parseCssColorToHex6(cur);
+        if (hex && hex !== lastSyncedHex) {
+            lastSyncedHex = hex;
+            void Promise.resolve(electron_1.ipcRenderer.invoke('wcv:set-theme-color', hex)).catch(() => undefined);
+        }
+    };
+    syncNow();
+    g.document.addEventListener?.('DOMContentLoaded', syncNow);
+    g.addEventListener?.('load', syncNow);
+}
+const FLAG_KEY = 'jetski.developer.customFlagOverrides';
+const MIG_KEY = `${FLAG_KEY}.migrated`;
+const WRITE_EV = 'agy-flag-overrides-write';
+const parseFlags = (v) => {
+    try {
+        const p = typeof v === 'string' ? JSON.parse(v) : null;
+        return p && typeof p === 'object' && !Array.isArray(p) ? String(v) : null;
+    }
+    catch {
+        return null;
+    }
+};
+function installCustomFlagOverridesSync() {
+    const g = globalThis;
+    const h = g.location?.hostname;
+    const okHost = !g.location ||
+        (/^https?:$/.test(g.location.protocol ?? '') && (h === '127.0.0.1' || h === 'localhost'));
+    if (!okHost || (g.top && g.self && g.top !== g.self)) {
+        return;
+    }
+    let pending = 0;
+    const persist = (v) => {
+        pending++;
+        void Promise.resolve(electron_1.ipcRenderer.invoke('storage:update-items', {
+            [FLAG_KEY]: v,
+            [MIG_KEY]: 'true',
+        }))
+            .catch(() => { })
+            .finally(() => pending--);
+    };
+    const runMain = (js) => void Promise.resolve(electron_1.webFrame.executeJavaScript?.(js)).catch(() => { });
+    let s;
+    let last = null;
+    let suppress = false;
+    try {
+        if (!g.localStorage?.getItem || !g.localStorage.setItem) {
+            return;
+        }
+        s = g.localStorage;
+        const m = electron_1.ipcRenderer.sendSync?.('storage:get-items-sync');
+        if (!m || typeof m !== 'object') {
+            return;
+        }
+        const kv = m;
+        const migrated = MIG_KEY in kv || FLAG_KEY in kv;
+        const disk = parseFlags(kv[FLAG_KEY]);
+        const localRaw = s.getItem(FLAG_KEY);
+        const local = parseFlags(localRaw);
+        last = migrated ? disk : local;
+        if (disk !== null && localRaw !== disk) {
+            s.setItem(FLAG_KEY, disk);
+        }
+        else if (!migrated && local !== null) {
+            persist(local);
+        }
+        else if (migrated && disk === null && localRaw !== null) {
+            s.removeItem?.(FLAG_KEY);
+        }
+    }
+    catch {
+        return;
+    }
+    const syncOut = () => {
+        try {
+            const raw = suppress ? undefined : s.getItem(FLAG_KEY);
+            const next = raw ? parseFlags(raw) : null;
+            const valid = raw === null || next !== null;
+            if (raw !== undefined && valid && next !== last) {
+                last = next;
+                persist(next);
+            }
+        }
+        catch { }
+    };
+    [WRITE_EV, 'pagehide', 'beforeunload'].forEach((ev) => g.addEventListener?.(ev, syncOut));
+    g.addEventListener?.('visibilitychange', syncOut);
+    const kJson = JSON.stringify(FLAG_KEY);
+    runMain(`(()=>{const P=window.Storage?.prototype,L=window.localStorage,K=${kJson},E=${JSON.stringify(WRITE_EV)};if(!P||!L||P.__agyFlagHook)return;Object.defineProperty(P,'__agyFlagHook',{value:1});const n=()=>{window.dispatchEvent(new Event(E))},si=P.setItem,ri=P.removeItem,cl=P.clear;P.setItem=function(k,v){si.call(this,k,v);if(this===L&&String(k)===K)n()};P.removeItem=function(k){ri.call(this,k);if(this===L&&String(k)===K)n()};P.clear=function(){cl.call(this);if(this===L)n()}})()`);
+    electron_1.ipcRenderer.on('storage:changed', (_e, changes) => {
+        const raw = changes && FLAG_KEY in changes ? changes[FLAG_KEY] : undefined;
+        const next = raw === null ? null : parseFlags(raw);
+        if (raw === undefined || (raw !== null && next === null)) {
+            return;
+        }
+        try {
+            const cur = s.getItem(FLAG_KEY);
+            if (cur === next) {
+                last = next;
+                return;
+            }
+            if (pending > 0 || cur !== last) {
+                return;
+            }
+            last = next;
+            suppress = true;
+            if (next === null) {
+                s.removeItem?.(FLAG_KEY);
+            }
+            else {
+                s.setItem(FLAG_KEY, next);
+            }
+            runMain(`window.dispatchEvent(new StorageEvent('storage',{key:${kJson},newValue:${JSON.stringify(next)},storageArea:window.localStorage}))`);
+        }
+        catch { }
+        finally {
+            suppress = false;
+        }
+    });
+}
+installHubSurfaceThemeAutoSync();
+installCustomFlagOverridesSync();
 //# sourceMappingURL=preload.js.map

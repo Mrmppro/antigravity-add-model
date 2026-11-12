@@ -37,6 +37,7 @@ export declare function clearLsProcess(): void;
  * Returns the stack trace string, or undefined if no trigger phrase was found.
  */
 export declare function extractCrashStackTrace(stderr: string): string | undefined;
+export declare function prefetchShellEnv(): void;
 /**
  * Spawn the language server and resolve with a LanguageServerHandle once
  * the LS reports its HTTP port. Rejects on timeout or unexpected exit

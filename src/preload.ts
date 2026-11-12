@@ -121,6 +121,54 @@ interface ElectronNativeAPI {
   revealInFilePicker: (path: string) => Promise<void>;
   showContextMenu: (items: ContextMenuItem[]) => Promise<string | null>;
   closeContextMenu: () => Promise<void>;
+  onWebviewDeviceChooserEvent?: (callback: (payload: any) => void) => () => void;
+  respondWebviewDeviceChooser?: (requestId: any, resolution: any) => Promise<any>;
+  getWebviewMemoryUsage?: (webContentsIds: any) => Promise<any>;
+  getDefaultDownloadDirectory?: () => Promise<string>;
+  executeJavaScriptInIsolatedWorld?: (wcId: any, worldId: any, code: any) => Promise<any>;
+  scriptJailProtocol?: number;
+  listWebviewFrames?: (wcId: any) => Promise<any>;
+  executeJavaScriptInFrameIsolatedWorld?: (wcId: any, frameId: any, code: any, expectedOrigin: any) => Promise<any>;
+  runScriptInJail?: (req: any) => Promise<any>;
+  abortScriptJail?: (jailId: any) => Promise<any>;
+  warmScriptJail?: () => Promise<any>;
+  subscribeWebviewSecurityState?: (webContentsId: any, callback: any) => () => void;
+  allowWebviewCertificate?: (webContentsId: any, url: any) => Promise<any>;
+  clearWebviewSiteData?: (webContentsId: any, origin: any) => Promise<any>;
+  onWebviewOpenNewTab?: (callback: (url: string, webContentsId: number) => void) => () => void;
+  setWebviewDownloadDirectory?: (webContentsId: any, downloadDir: any) => Promise<any>;
+  setWebviewAgentControlled?: (webContentsId: any, active: any) => Promise<any>;
+  openWebviewDownload?: (downloadId: any) => Promise<any>;
+  showWebviewDownloadInFolder?: (downloadId: any) => Promise<any>;
+  cancelWebviewDownload?: (downloadId: any) => Promise<any>;
+  resolveWebviewDownload?: (downloadId: any, approve: any) => Promise<any>;
+  selectDownloadDirectory?: (defaultPath: any) => Promise<any>;
+  onWebviewFaviconUpdated?: (callback: any) => () => void;
+  onWebviewDownloadProgress?: (callback: any) => () => void;
+  setWebviewDialogPolicy?: (webContentsId: any, policy: any) => Promise<any>;
+  handleWebviewDialog?: (webContentsId: any, decision: any) => Promise<any>;
+  onWebviewDialogOpening?: (callback: any) => () => void;
+  getWebviewNetworkRequests?: (webContentsId: any) => Promise<any>;
+  clearWebviewNetworkRequests?: (webContentsId: any) => Promise<any>;
+  onWebviewNetworkRequest?: (callback: any) => () => void;
+  onWebviewPromptRequest?: (callback: any) => () => void;
+  respondWebviewPrompt?: (promptId: any, value: any) => Promise<any>;
+  setWebviewFileChooserPolicy?: (webContentsId: any, policy: any) => Promise<any>;
+  handleWebviewFileChooser?: (webContentsId: any, decision: any) => Promise<any>;
+  setWebviewInputFiles?: (webContentsId: any, request: any) => Promise<any>;
+  resolveWebviewUploadFiles?: (request: any) => Promise<any>;
+  onWebviewFileChooserOpened?: (callback: any) => () => void;
+  setWebviewWebMcpEnabled?: (enabled: any) => Promise<any>;
+  listWebviewWebMcpTools?: (webContentsId: any, origin: any) => Promise<any>;
+  callWebviewWebMcpTool?: (webContentsId: any, origin: any, params: any) => Promise<any>;
+  cancelWebviewWebMcpToolCall?: (webContentsId: any, callId: any) => Promise<any>;
+  wcvBrowser?: any;
+}
+
+interface DesktopMicAPI {
+  getAccessStatus: () => Promise<unknown>;
+  requestAccess: () => Promise<unknown>;
+  openSystemPreferences: () => Promise<unknown>;
 }
 
 interface IdeAPI {
@@ -262,6 +310,52 @@ const agentAPI: AgentAPI = {
   updateActiveAgentCount: (count) => ipcRenderer.invoke('agent:update-active-count', count),
 };
 
+function subscribeIpcChannel(channel: string, callback: (...args: any[]) => void) {
+  const handler = (_event: any, payload: any) => {
+    callback(payload);
+  };
+  ipcRenderer.on(channel, handler);
+  return () => {
+    ipcRenderer.removeListener(channel, handler);
+  };
+}
+
+const wcvBrowserAPI = {
+  acquire: (req: any) => ipcRenderer.invoke('wcv:acquire', req),
+  show: (tabKey: any, boundsCss: any) => ipcRenderer.invoke('wcv:show', tabKey, boundsCss),
+  hide: (tabKey: any) => ipcRenderer.invoke('wcv:hide', tabKey),
+  setBounds: (tabKey: any, boundsCss: any) => {
+    ipcRenderer.sendSync?.('wcv:set-bounds-sync', tabKey, boundsCss);
+    return Promise.resolve();
+  },
+  setThemeColor: (color: any) => ipcRenderer.invoke('wcv:set-theme-color', color),
+  setPinned: (tabKey: any, pinned: any) => ipcRenderer.invoke('wcv:set-pinned', tabKey, pinned),
+  setAgentControlling: (tabKey: any, active: any) => ipcRenderer.invoke('wcv:set-agent-controlling', tabKey, active),
+  setOverlayActive: (tabKey: any, active: any) => ipcRenderer.invoke('wcv:set-overlay-active', tabKey, active),
+  setPortalOverlayOpen: (open: any) => ipcRenderer.invoke('wcv:set-portal-overlay-open', open),
+  elevate: (tabKey: any, reason: any, focusBrowser: any) => ipcRenderer.invoke('wcv:elevate', tabKey, reason, focusBrowser),
+  setDragOver: (tabKey: any, active: any) => ipcRenderer.invoke('wcv:set-drag-over', tabKey, active),
+  demote: (tabKey: any, reason: any) => ipcRenderer.invoke('wcv:demote', tabKey, reason),
+  navigate: (tabKey: any, url: any) => ipcRenderer.invoke('wcv:navigate', tabKey, url),
+  control: (tabKey: any, action: any) => ipcRenderer.invoke('wcv:control', tabKey, action),
+  sendMouse: (tabKey: any, params: any, coordSpace: any) =>
+    coordSpace !== undefined
+      ? ipcRenderer.invoke('wcv:send-mouse', tabKey, params, coordSpace)
+      : ipcRenderer.invoke('wcv:send-mouse', tabKey, params),
+  sendKey: (tabKey: any, params: any) => ipcRenderer.invoke('wcv:send-key', tabKey, params),
+  insertText: (tabKey: any, text: any) => ipcRenderer.invoke('wcv:insert-text', tabKey, text),
+  setViewportSize: (tabKey: any, size: any) => ipcRenderer.invoke('wcv:set-viewport-size', tabKey, size),
+  capturePage: (tabKey: any) => ipcRenderer.invoke('wcv:capture-page', tabKey),
+  dispose: (tabKey: any) => ipcRenderer.invoke('wcv:dispose', tabKey),
+  onGuestEvent: (cb: any) => subscribeIpcChannel('wcv:guest-event', cb),
+  onZOrderChanged: (cb: any) => subscribeIpcChannel('wcv:z-order-changed', cb),
+  onShortcutForwarded: (cb: any) => subscribeIpcChannel('wcv:shortcut-forwarded', cb),
+  onCursorChanged: (cb: any) => subscribeIpcChannel('wcv:cursor-changed', cb),
+};
+
+let deviceChooserSubscriberCount = 0;
+let promptRequestSubscriberCount = 0;
+
 const electronNativeAPI: ElectronNativeAPI = {
   getZoomLevel: () => webFrame.getZoomFactor(),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
@@ -285,6 +379,178 @@ const electronNativeAPI: ElectronNativeAPI = {
   revealInFilePicker: (path) => ipcRenderer.invoke('shell:reveal-in-file-picker', path),
   showContextMenu: (items) => ipcRenderer.invoke('window:show-context-menu', items),
   closeContextMenu: () => ipcRenderer.invoke('window:close-context-menu'),
+  onWebviewDeviceChooserEvent: (callback) => {
+    if (++deviceChooserSubscriberCount === 1) {
+      ipcRenderer.send('webview:device-chooser-subscriber-state', true);
+    }
+    const unsubscribe = subscribeIpcChannel('webview:device-chooser-event', callback);
+    let active = true;
+    return () => {
+      if (!active) {
+        return;
+      }
+      active = false;
+      unsubscribe();
+      if (--deviceChooserSubscriberCount === 0) {
+        ipcRenderer.send('webview:device-chooser-subscriber-state', false);
+      }
+    };
+  },
+  respondWebviewDeviceChooser: (requestId, resolution) =>
+    ipcRenderer.invoke('webview:device-chooser-response', requestId, resolution),
+  getWebviewMemoryUsage: (webContentsIds) =>
+    ipcRenderer.invoke('webview:get-memory-usage', webContentsIds),
+  getDefaultDownloadDirectory: () => ipcRenderer.invoke('dialog:get-default-download-dir'),
+  executeJavaScriptInIsolatedWorld: (wcId, worldId, code) =>
+    ipcRenderer.invoke('webview:execute-js-isolated-world', wcId, worldId, code),
+  scriptJailProtocol: 2,
+  listWebviewFrames: (wcId) => ipcRenderer.invoke('webview:list-frames', wcId),
+  executeJavaScriptInFrameIsolatedWorld: (wcId, frameId, code, expectedOrigin) =>
+    ipcRenderer.invoke('webview:execute-js-frame-isolated-world', wcId, frameId, code, expectedOrigin),
+  runScriptInJail: (req) => ipcRenderer.invoke('script-jail:run', req),
+  abortScriptJail: (jailId) => ipcRenderer.invoke('script-jail:abort', jailId),
+  warmScriptJail: () => ipcRenderer.invoke('script-jail:warm'),
+  subscribeWebviewSecurityState: (webContentsId, callback) => {
+    let latestSeq = 0;
+    let subscribed = true;
+    const deliver = (state: any) => {
+      if (
+        !subscribed ||
+        !state ||
+        state.webContentsId !== webContentsId ||
+        state.seq <= latestSeq
+      ) {
+        return;
+      }
+      latestSeq = state.seq;
+      callback(state);
+    };
+    const handler = (_event: any, state: any) => {
+      deliver(state);
+    };
+    ipcRenderer.on('webview:security-state-changed', handler);
+    void ipcRenderer
+      .invoke('webview:get-security-state', webContentsId)
+      .then(deliver, () => undefined);
+    return () => {
+      subscribed = false;
+      ipcRenderer.removeListener('webview:security-state-changed', handler);
+    };
+  },
+  allowWebviewCertificate: (webContentsId, url) =>
+    ipcRenderer.invoke('webview:allow-certificate', webContentsId, url),
+  clearWebviewSiteData: (webContentsId, origin) =>
+    ipcRenderer.invoke('webview:clear-site-data', webContentsId, origin),
+  onWebviewOpenNewTab: (callback) => {
+    const handler = (_event: any, url: any, webContentsId: any) => {
+      callback(url, webContentsId);
+    };
+    ipcRenderer.on('webview:open-new-tab', handler);
+    return () => {
+      ipcRenderer.removeListener('webview:open-new-tab', handler);
+    };
+  },
+  setWebviewDownloadDirectory: (webContentsId, downloadDir) =>
+    ipcRenderer.invoke('webview:set-download-dir', webContentsId, downloadDir),
+  setWebviewAgentControlled: (webContentsId, active) =>
+    ipcRenderer.invoke('webview:set-agent-controlled', webContentsId, active),
+  openWebviewDownload: (downloadId) =>
+    ipcRenderer.invoke('webview:open-download', downloadId),
+  showWebviewDownloadInFolder: (downloadId) =>
+    ipcRenderer.invoke('webview:show-download-in-folder', downloadId),
+  cancelWebviewDownload: (downloadId) =>
+    ipcRenderer.invoke('webview:cancel-download', downloadId),
+  resolveWebviewDownload: (downloadId, approve) =>
+    ipcRenderer.invoke('webview:resolve-download', downloadId, approve),
+  selectDownloadDirectory: (defaultPath) =>
+    ipcRenderer.invoke('dialog:select-download-dir', defaultPath),
+  onWebviewFaviconUpdated: (callback) => {
+    const handler = (_event: any, payload: any) => {
+      callback(payload);
+    };
+    ipcRenderer.on('webview:favicon-updated', handler);
+    return () => {
+      ipcRenderer.removeListener('webview:favicon-updated', handler);
+    };
+  },
+  onWebviewDownloadProgress: (callback) => {
+    const handler = (_event: any, payload: any) => {
+      callback(payload);
+    };
+    ipcRenderer.on('webview:download-progress', handler);
+    return () => {
+      ipcRenderer.removeListener('webview:download-progress', handler);
+    };
+  },
+  setWebviewDialogPolicy: (webContentsId, policy) =>
+    ipcRenderer.invoke('webview:set-dialog-policy', webContentsId, policy),
+  handleWebviewDialog: (webContentsId, decision) =>
+    ipcRenderer.invoke('webview:handle-javascript-dialog', webContentsId, decision),
+  onWebviewDialogOpening: (callback) =>
+    subscribeIpcChannel('webview:javascript-dialog-opening', callback),
+  getWebviewNetworkRequests: (webContentsId) =>
+    ipcRenderer.invoke('webview:get-network-requests', webContentsId),
+  clearWebviewNetworkRequests: (webContentsId) =>
+    ipcRenderer.invoke('webview:clear-network-requests', webContentsId),
+  onWebviewNetworkRequest: (callback) =>
+    subscribeIpcChannel('webview:network-request-updated', callback),
+  onWebviewPromptRequest: (callback) => {
+    promptRequestSubscriberCount += 1;
+    if (promptRequestSubscriberCount === 1) {
+      ipcRenderer.send('webview:prompt-subscriber-state', true);
+    }
+    const unsubscribe = subscribeIpcChannel('webview:prompt-request', callback);
+    let active = true;
+    return () => {
+      if (!active) {
+        return;
+      }
+      active = false;
+      unsubscribe();
+      promptRequestSubscriberCount = Math.max(0, promptRequestSubscriberCount - 1);
+      if (promptRequestSubscriberCount === 0) {
+        ipcRenderer.send('webview:prompt-subscriber-state', false);
+      }
+    };
+  },
+  respondWebviewPrompt: (promptId, value) =>
+    ipcRenderer.invoke('webview:prompt-response', promptId, value),
+  setWebviewFileChooserPolicy: (webContentsId, policy) =>
+    ipcRenderer.invoke('webview:set-file-chooser-policy', webContentsId, policy),
+  handleWebviewFileChooser: (webContentsId, decision) =>
+    ipcRenderer.invoke('webview:handle-file-chooser', webContentsId, decision),
+  setWebviewInputFiles: (webContentsId, request) =>
+    ipcRenderer.invoke('webview:set-input-files', webContentsId, request),
+  resolveWebviewUploadFiles: (request) =>
+    ipcRenderer.invoke('webview:resolve-upload-files', request),
+  onWebviewFileChooserOpened: (callback) =>
+    subscribeIpcChannel('webview:file-chooser-opened', callback),
+  setWebviewWebMcpEnabled: (enabled) =>
+    ipcRenderer.invoke('webview:webmcp-set-enabled', enabled),
+  listWebviewWebMcpTools: (webContentsId, origin) =>
+    ipcRenderer.invoke('webview:webmcp-list-tools', webContentsId, origin),
+  callWebviewWebMcpTool: (webContentsId, origin, params) =>
+    ipcRenderer.invoke('webview:webmcp-call-tool', webContentsId, origin, params),
+  cancelWebviewWebMcpToolCall: (webContentsId, callId) =>
+    ipcRenderer.invoke('webview:webmcp-cancel-tool-call', webContentsId, callId),
+  wcvBrowser: wcvBrowserAPI,
+};
+
+ipcRenderer.on('agy-script-jail:port', (event: any, payload: any) => {
+  window.postMessage(
+    {
+      type: 'agy-script-jail-port',
+      jailId: payload?.jailId,
+    },
+    '*',
+    event.ports
+  );
+});
+
+const desktopMicAPI: DesktopMicAPI = {
+  getAccessStatus: () => ipcRenderer.invoke('mic:get-access-status'),
+  requestAccess: () => ipcRenderer.invoke('mic:request-access'),
+  openSystemPreferences: () => ipcRenderer.invoke('mic:open-system-preferences'),
 };
 
 const ideAPI: IdeAPI = {
@@ -310,6 +576,7 @@ contextBridge.exposeInMainWorld('agent', agentAPI);
 contextBridge.exposeInMainWorld('electronNative', electronNativeAPI);
 contextBridge.exposeInMainWorld('ide', ideAPI);
 contextBridge.exposeInMainWorld('wsl', wslAPI);
+contextBridge.exposeInMainWorld('desktopMic', desktopMicAPI);
 
 // ─── Renderer Augmentations (for TypeScript global type declarations) ──────
 
@@ -327,6 +594,7 @@ declare global {
     electronNative: ElectronNativeAPI;
     ide: IdeAPI;
     wsl: WslAPI;
+    desktopMic: DesktopMicAPI;
   }
 }
 
@@ -1368,4 +1636,194 @@ ipcRenderer.on('open-custom-models-modal', () => {
 // Global window helpers (callable from DevTools or menu without modifying DOM)
 (window as unknown as Record<string, unknown>).openCustomModelsModal = openManageModelsModal;
 (window as unknown as Record<string, unknown>).openAddModelModal = openAddModelModal;
+
+const HEX6_RE = /^#[0-9a-fA-F]{6}$/;
+const HEX3_RE = /^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/;
+const RGB_RE = /^rgba?\(\s*(\d{1,3})\s*(?:,|\s)\s*(\d{1,3})\s*(?:,|\s)\s*(\d{1,3})(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/i;
+const CSS_VAR_RE = /^var\(\s*(--[^,\s)]+)(?:\s*,\s*(.+))?\)$/;
+function parseCssColorToHex6(raw: string): string | undefined {
+  const s = raw.trim();
+  if (!s) {
+    return undefined;
+  }
+  if (HEX6_RE.test(s)) {
+    return s.toUpperCase();
+  }
+  const h3 = HEX3_RE.exec(s);
+  if (h3) {
+    return `#${h3[1]}${h3[1]}${h3[2]}${h3[2]}${h3[3]}${h3[3]}`.toUpperCase();
+  }
+  const rgb = RGB_RE.exec(s);
+  if (!rgb) {
+    return undefined;
+  }
+  if (rgb[4] !== undefined) {
+    const a = rgb[4].endsWith('%') ? Number(rgb[4].slice(0, -1)) / 100 : Number(rgb[4]);
+    if (!Number.isFinite(a) || a < 1) {
+      return undefined;
+    }
+  }
+  const h2 = (v: any) =>
+    Math.max(0, Math.min(255, Math.round(Number(v))))
+      .toString(16)
+      .padStart(2, '0');
+  return `#${h2(rgb[1])}${h2(rgb[2])}${h2(rgb[3])}`.toUpperCase();
+}
+
+function installHubSurfaceThemeAutoSync(): void {
+  const g = globalThis as any;
+  if (!g.document || typeof g.getComputedStyle !== 'function' || (g.top && g.self && g.top !== g.self)) {
+    return;
+  }
+  let lastSyncedHex = '';
+  let observedRoot: any = null;
+  const syncNow = () => {
+    const rootEl = g.document?.documentElement;
+    if (!rootEl) {
+      return;
+    }
+    if (observedRoot !== rootEl && typeof g.MutationObserver === 'function') {
+      observedRoot = rootEl;
+      new g.MutationObserver(syncNow).observe(rootEl, {
+        attributes: true,
+        attributeFilter: ['style', 'class', 'data-theme'],
+      });
+    }
+    const style = g.getComputedStyle?.(rootEl);
+    let cur = style?.getPropertyValue?.('--background')?.trim() ?? '';
+    for (let depth = 0; depth < 3 && cur; depth++) {
+      const hex = parseCssColorToHex6(cur);
+      if (hex) {
+        cur = hex;
+        break;
+      }
+      const m = CSS_VAR_RE.exec(cur);
+      if (!m) {
+        break;
+      }
+      cur = style?.getPropertyValue?.(m[1])?.trim() || m[2]?.trim() || '';
+    }
+    const hex = parseCssColorToHex6(cur);
+    if (hex && hex !== lastSyncedHex) {
+      lastSyncedHex = hex;
+      void Promise.resolve(ipcRenderer.invoke('wcv:set-theme-color', hex)).catch(() => undefined);
+    }
+  };
+  syncNow();
+  g.document.addEventListener?.('DOMContentLoaded', syncNow);
+  g.addEventListener?.('load', syncNow);
+}
+
+const FLAG_KEY = 'jetski.developer.customFlagOverrides';
+const MIG_KEY = `${FLAG_KEY}.migrated`;
+const WRITE_EV = 'agy-flag-overrides-write';
+const parseFlags = (v: any) => {
+  try {
+    const p = typeof v === 'string' ? JSON.parse(v) : null;
+    return p && typeof p === 'object' && !Array.isArray(p) ? String(v) : null;
+  } catch {
+    return null;
+  }
+};
+
+function installCustomFlagOverridesSync(): void {
+  const g = globalThis as any;
+  const h = g.location?.hostname;
+  const okHost =
+    !g.location ||
+    (/^https?:$/.test(g.location.protocol ?? '') && (h === '127.0.0.1' || h === 'localhost'));
+  if (!okHost || (g.top && g.self && g.top !== g.self)) {
+    return;
+  }
+  let pending = 0;
+  const persist = (v: any) => {
+    pending++;
+    void Promise.resolve(
+      ipcRenderer.invoke('storage:update-items', {
+        [FLAG_KEY]: v,
+        [MIG_KEY]: 'true',
+      })
+    )
+      .catch(() => {})
+      .finally(() => pending--);
+  };
+  const runMain = (js: string) => void Promise.resolve(webFrame.executeJavaScript?.(js)).catch(() => {});
+  let s: any;
+  let last: any = null;
+  let suppress = false;
+  try {
+    if (!g.localStorage?.getItem || !g.localStorage.setItem) {
+      return;
+    }
+    s = g.localStorage;
+    const m = ipcRenderer.sendSync?.('storage:get-items-sync');
+    if (!m || typeof m !== 'object') {
+      return;
+    }
+    const kv = m;
+    const migrated = MIG_KEY in kv || FLAG_KEY in kv;
+    const disk = parseFlags(kv[FLAG_KEY]);
+    const localRaw = s.getItem(FLAG_KEY);
+    const local = parseFlags(localRaw);
+    last = migrated ? disk : local;
+    if (disk !== null && localRaw !== disk) {
+      s.setItem(FLAG_KEY, disk);
+    } else if (!migrated && local !== null) {
+      persist(local);
+    } else if (migrated && disk === null && localRaw !== null) {
+      s.removeItem?.(FLAG_KEY);
+    }
+  } catch {
+    return;
+  }
+  const syncOut = () => {
+    try {
+      const raw = suppress ? undefined : s.getItem(FLAG_KEY);
+      const next = raw ? parseFlags(raw) : null;
+      const valid = raw === null || next !== null;
+      if (raw !== undefined && valid && next !== last) {
+        last = next;
+        persist(next);
+      }
+    } catch {}
+  };
+  [WRITE_EV, 'pagehide', 'beforeunload'].forEach((ev) => g.addEventListener?.(ev, syncOut));
+  g.addEventListener?.('visibilitychange', syncOut);
+  const kJson = JSON.stringify(FLAG_KEY);
+  runMain(
+    `(()=>{const P=window.Storage?.prototype,L=window.localStorage,K=${kJson},E=${JSON.stringify(WRITE_EV)};if(!P||!L||P.__agyFlagHook)return;Object.defineProperty(P,'__agyFlagHook',{value:1});const n=()=>{window.dispatchEvent(new Event(E))},si=P.setItem,ri=P.removeItem,cl=P.clear;P.setItem=function(k,v){si.call(this,k,v);if(this===L&&String(k)===K)n()};P.removeItem=function(k){ri.call(this,k);if(this===L&&String(k)===K)n()};P.clear=function(){cl.call(this);if(this===L)n()}})()`
+  );
+  ipcRenderer.on('storage:changed', (_e: any, changes: any) => {
+    const raw = changes && FLAG_KEY in changes ? changes[FLAG_KEY] : undefined;
+    const next = raw === null ? null : parseFlags(raw);
+    if (raw === undefined || (raw !== null && next === null)) {
+      return;
+    }
+    try {
+      const cur = s.getItem(FLAG_KEY);
+      if (cur === next) {
+        last = next;
+        return;
+      }
+      if (pending > 0 || cur !== last) {
+        return;
+      }
+      last = next;
+      suppress = true;
+      if (next === null) {
+        s.removeItem?.(FLAG_KEY);
+      } else {
+        s.setItem(FLAG_KEY, next);
+      }
+      runMain(
+        `window.dispatchEvent(new StorageEvent('storage',{key:${kJson},newValue:${JSON.stringify(next)},storageArea:window.localStorage}))`
+      );
+    } catch {} finally {
+      suppress = false;
+    }
+  });
+}
+
+installHubSurfaceThemeAutoSync();
+installCustomFlagOverridesSync();
 

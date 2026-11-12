@@ -36,25 +36,66 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.registerIpcHandlers = registerIpcHandlers;
 exports.reverifyStaleRoutes = reverifyStaleRoutes;
 exports.scheduleAutoSwitchReverification = scheduleAutoSwitchReverification;
+exports.registerIpcHandlers = registerIpcHandlers;
 const electron_1 = require("electron");
 const electron_updater_1 = require("electron-updater");
+const types_1 = require("./types");
 const updater_1 = require("./updater");
 const main_1 = __importDefault(require("electron-log/main"));
 const fs = __importStar(require("fs/promises"));
+const fsSync = __importStar(require("fs"));
 const path = __importStar(require("path"));
-const url_1 = require("url");
+const paths_1 = require("./paths");
 const customScheme_1 = require("./customScheme");
 const tray_1 = require("./tray");
-const config_1 = require("./autoSwitch/config");
-const verifier_1 = require("./autoSwitch/verifier");
+const { isOwnedBrowserGuestWebContents, openTrackedWebviewDownload, resolveTrackedWebviewDownload, setGuestAgentControlled, setGuestDownloadDirectory, showTrackedWebviewDownloadInFolder, cancelTrackedWebviewDownload, } = require('./webviewBrowser');
 const constants_1 = require("./ideInstall/constants");
+const { deviceChooserController, WEBVIEW_DEVICE_CHOOSER_RESPONSE_CHANNEL, WEBVIEW_DEVICE_CHOOSER_SUBSCRIBER_STATE_CHANNEL, } = require('./deviceChooser');
+const url_1 = require("url");
 const wsl_1 = require("./wsl");
 const menu_1 = require("./menu");
+const { abortScriptInJail, runScriptInJail, warmScriptJail } = require('./scriptJail');
+const externalUrl_1 = require("./externalUrl");
+const utils_1 = require("./utils");
+const hubZoom_1 = require("./hubZoom");
+const { wcvBrowserRegistry } = require('./wcvBrowserRegistry');
+const { isAuthorizedHubMainFrameEvent, registerWcvIpcHandlers } = require('./wcvIpcHandlers');
+const { guestDialogController } = require('./guestDialogController');
+const { guestFileChooserController, resolveGuestUploadFiles, } = require('./guestFileChooserController');
+const { guestPromptController, WEBVIEW_PROMPT_RESPONSE_CHANNEL, WEBVIEW_PROMPT_SUBSCRIBER_STATE_CHANNEL, } = require('./guestPromptController');
+const { HUMAN_PROMPT_SYNC_CHANNEL } = require('./webviewPromptPreload');
+const { executeJavaScriptInIsolatedWorldWhenReady } = require('./isolatedWorldExec');
+const { guestFrameBridge } = require('./guestFrameBridge');
+const { guestNetworkController } = require('./guestNetworkController');
+const { guestWebMcpController } = require('./guestWebMcpController');
+const config_1 = require("./autoSwitch/config");
+const verifier_1 = require("./autoSwitch/verifier");
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const cryptoStore = require('./cryptoStore');
+const SAFE_UPLOAD_CONVERSATION_ID_RE = /^[a-zA-Z0-9_-]+$/;
+function isMainFramePromptCaller(event) {
+    const s = event?.sender;
+    return Boolean(s &&
+        !s.isDestroyed?.() &&
+        !event?.senderFrame?.parent &&
+        (!event?.senderFrame || !s.mainFrame || event.senderFrame === s.mainFrame));
+}
+const onHumanPromptSync = (event, rawJson) => {
+    guestPromptController.handleSyncPrompt(event, rawJson);
+};
+const onHumanPromptSubscriberState = (event, subscribed) => {
+    if (isMainFramePromptCaller(event)) {
+        guestPromptController.setHostSubscribed(event.sender, Boolean(subscribed));
+    }
+};
+deviceChooserController.setHostResolver((webContentsId) => wcvBrowserRegistry.resolveDeviceChooserHost(webContentsId));
+function onDeviceChooserSubscriberState(event, subscribed) {
+    if (isAuthorizedHubMainFrameEvent(event)) {
+        deviceChooserController.setHostSubscribed(event.sender, Boolean(subscribed));
+    }
+}
 function buildContextMenuTemplate(items, onSelect) {
     return items.map((item) => {
         if (item.type === 'separator') {
@@ -82,12 +123,106 @@ function buildContextMenuTemplate(items, onSelect) {
         };
     });
 }
-/**
- * Registers all IPC handlers for the main process.
- */
+async function findStoredModel(modelName) {
+    const geminiDir = path.join(electron_1.app.getPath('home'), '.gemini', 'antigravity');
+    const filePath = path.join(geminiDir, 'custom_models.json');
+    try {
+        const content = await fs.readFile(filePath, 'utf-8');
+        const parsed = JSON.parse(content);
+        const cleanTarget = modelName.replace(/^models\//, '').trim();
+        return parsed.models?.find((m) => {
+            const mClean = (m.name || '').replace(/^models\//, '').trim();
+            return mClean === cleanTarget || m.name === modelName;
+        });
+    }
+    catch {
+        return undefined;
+    }
+}
+async function decryptStoredKey(model) {
+    let key = model.apiKey || '';
+    if (!key || key === 'none')
+        return '';
+    if (model.encrypted) {
+        try {
+            key = cryptoStore.decryptString(key);
+        }
+        catch (err) {
+            main_1.default.warn('[Auto Switch] Could not decrypt stored key for', model.name, err);
+            return '';
+        }
+    }
+    return key;
+}
+async function upsertRoute(route) {
+    const filePath = (0, config_1.getAutoSwitchConfigPath)(electron_1.app.getPath('home'));
+    const policy = (0, config_1.loadAutoSwitchPolicy)(filePath);
+    const idx = policy.routes.findIndex((r) => r.id === route.id);
+    if (idx >= 0) {
+        policy.routes[idx] = route;
+    }
+    else {
+        policy.routes.push(route);
+    }
+    (0, config_1.saveAutoSwitchPolicy)(filePath, policy);
+}
+async function reverifyStaleRoutes(maxAgeMs = 7 * 24 * 3600 * 1000) {
+    const filePath = (0, config_1.getAutoSwitchConfigPath)(electron_1.app.getPath('home'));
+    const policy = (0, config_1.loadAutoSwitchPolicy)(filePath);
+    const now = Date.now();
+    let checked = 0;
+    const failed = [];
+    for (const route of policy.routes) {
+        if (!route.enabled)
+            continue;
+        const verifiedAt = route.verified?.verifiedAt ?? 0;
+        if (now - verifiedAt < maxAgeMs)
+            continue;
+        const model = await findStoredModel(route.id);
+        if (!model) {
+            route.enabled = false;
+            failed.push(route.id);
+            continue;
+        }
+        const apiKey = await decryptStoredKey(model);
+        checked++;
+        const res = await (0, verifier_1.verifyModel)({
+            name: model.name,
+            displayName: model.displayName,
+            provider: model.provider,
+            apiKey,
+            apiUrl: model.apiUrl,
+            externalModelName: model.externalModelName,
+            allowUnauthorized: model.allowUnauthorized,
+        }, apiKey);
+        if (!res.ok) {
+            route.enabled = false;
+            failed.push(route.id);
+            main_1.default.warn('[Auto Switch] Route failed re-verification and was disabled:', route.id);
+        }
+        else {
+            route.verified = res.route.verified;
+        }
+    }
+    if (checked > 0) {
+        (0, config_1.saveAutoSwitchPolicy)(filePath, policy);
+    }
+    return { checked, failed };
+}
+function scheduleAutoSwitchReverification() {
+    setTimeout(() => {
+        reverifyStaleRoutes().catch((err) => {
+            main_1.default.warn('[Auto Switch] Background reverification failed:', err);
+        });
+    }, 10000);
+}
+// ─── Main IPC Registration ──────────────────────────────────────────────────
 function registerIpcHandlers(storageManager) {
+    (0, hubZoom_1.setHubZoomStorageManager)(storageManager);
+    const getTargetHubWindow = () => {
+        return (0, utils_1.getFocusedHubWindow)() ?? (0, utils_1.getHubWindows)()[0];
+    };
     // Dialog
-    // In WSL mode, start the folder dialog in the distro's home directory.
     async function dialogDefaultPath() {
         const distro = (0, wsl_1.getActiveWslDistro)();
         if (!distro) {
@@ -100,8 +235,6 @@ function registerIpcHandlers(storageManager) {
             return undefined;
         }
     }
-    // In WSL mode, translate a picked Windows path to the distro's view.
-    // Returns undefined when the path is unusable (e.g. another distro).
     function mapPickedPath(picked) {
         const distro = (0, wsl_1.getActiveWslDistro)();
         if (!distro) {
@@ -113,7 +246,7 @@ function registerIpcHandlers(storageManager) {
             return undefined;
         }
         if (t.warning) {
-            void electron_1.dialog.showMessageBox({
+            void electron_1.dialog.showMessageBox(null, {
                 type: 'warning',
                 message: 'Folder is on the Windows filesystem',
                 detail: t.warning,
@@ -122,7 +255,7 @@ function registerIpcHandlers(storageManager) {
         return t.path;
     }
     electron_1.ipcMain.handle('dialog:open-workspace', async () => {
-        const result = await electron_1.dialog.showOpenDialog({
+        const result = await electron_1.dialog.showOpenDialog(null, {
             properties: ['openDirectory', 'createDirectory'],
             title: 'Open workspace',
             defaultPath: await dialogDefaultPath(),
@@ -132,10 +265,17 @@ function registerIpcHandlers(storageManager) {
         }
         return mapPickedPath(result.filePaths[0]);
     });
-    // Like 'dialog:open-workspace' but allows selecting multiple folders,
-    // returning an array of paths (empty if cancelled).
+    electron_1.ipcMain.handle('dialog:get-default-download-dir', (event) => {
+        assertTopLevelSenderId(event, 'dialog:get-default-download-dir');
+        try {
+            return electron_1.app.getPath('downloads');
+        }
+        catch {
+            return undefined;
+        }
+    });
     electron_1.ipcMain.handle('dialog:open-workspaces', async () => {
-        const result = await electron_1.dialog.showOpenDialog({
+        const result = await electron_1.dialog.showOpenDialog(null, {
             properties: ['openDirectory', 'createDirectory', 'multiSelections'],
             title: 'Open workspaces',
             defaultPath: await dialogDefaultPath(),
@@ -149,7 +289,7 @@ function registerIpcHandlers(storageManager) {
     });
     // Auto-updater
     electron_1.ipcMain.handle('updater:apply', async () => {
-        (0, updater_1.broadcastState)({ type: 'ready' });
+        (0, updater_1.broadcastState)({ type: types_1.UpdateState.Ready });
     });
     electron_1.ipcMain.handle('updater:quit-and-install', () => {
         if (!electron_1.app.isPackaged) {
@@ -158,18 +298,18 @@ function registerIpcHandlers(storageManager) {
         }
         electron_updater_1.autoUpdater.quitAndInstall();
     });
-    electron_1.ipcMain.handle('updater:get-state', async () => {
+    electron_1.ipcMain.handle('updater:get-state', () => {
         return (0, updater_1.getLastState)();
     });
     // Notifications
-    electron_1.ipcMain.handle('notification:send', (_event, options) => {
+    electron_1.ipcMain.handle('notification:send', (_, options) => {
         const notification = new electron_1.Notification({
             title: options.title,
             body: options.body,
             silent: options.silent ?? false,
         });
         notification.on('click', () => {
-            const win = electron_1.BrowserWindow.getAllWindows()[0];
+            const win = (0, utils_1.getHubWindows)()[0];
             if (win) {
                 if (win.isMinimized()) {
                     win.restore();
@@ -183,8 +323,6 @@ function registerIpcHandlers(storageManager) {
         });
         notification.show();
     });
-    // Note: copied from our desktop AGY implementation:
-    // vs/platform/nativeNotification/electron-main/electronNotificationService.ts
     electron_1.ipcMain.handle('notification:open-system-preferences', async () => {
         if (process.platform === 'darwin') {
             void electron_1.shell.openExternal('x-apple.systempreferences:com.apple.preference.notifications');
@@ -204,7 +342,7 @@ function registerIpcHandlers(storageManager) {
             for (const command of commands) {
                 try {
                     exec(command);
-                    return; // If one command executes without immediate error, assume success for now
+                    return;
                 }
                 catch {
                     // Try next
@@ -212,13 +350,100 @@ function registerIpcHandlers(storageManager) {
             }
         }
     });
+    const readOsMicAccessStatus = () => {
+        try {
+            return electron_1.systemPreferences.getMediaAccessStatus('microphone');
+        }
+        catch {
+            return 'unknown';
+        }
+    };
+    electron_1.ipcMain.handle('mic:get-access-status', (event) => {
+        if (!isAuthorizedHubMainFrameEvent(event)) {
+            return 'unknown';
+        }
+        if (process.platform === 'darwin' || process.platform === 'win32') {
+            return readOsMicAccessStatus();
+        }
+        return 'unknown';
+    });
+    let pendingMicAccessRequest = null;
+    electron_1.ipcMain.handle('mic:request-access', async (event) => {
+        if (!isAuthorizedHubMainFrameEvent(event)) {
+            return 'unknown';
+        }
+        if (process.platform === 'darwin') {
+            const status = readOsMicAccessStatus();
+            if (status !== 'not-determined') {
+                return status;
+            }
+            if (!pendingMicAccessRequest) {
+                pendingMicAccessRequest = (async () => {
+                    try {
+                        const granted = await electron_1.systemPreferences.askForMediaAccess('microphone');
+                        if (granted) {
+                            return 'granted';
+                        }
+                        const after = readOsMicAccessStatus();
+                        return after === 'not-determined' ? 'denied' : after;
+                    }
+                    catch {
+                        return 'unknown';
+                    }
+                    finally {
+                        pendingMicAccessRequest = null;
+                    }
+                })();
+            }
+            return pendingMicAccessRequest;
+        }
+        if (process.platform === 'win32') {
+            return readOsMicAccessStatus();
+        }
+        return 'unknown';
+    });
+    electron_1.ipcMain.handle('mic:open-system-preferences', async (event) => {
+        if (!isAuthorizedHubMainFrameEvent(event)) {
+            return;
+        }
+        if (process.platform === 'darwin') {
+            await (0, externalUrl_1.openExternalSafely)('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone', 'confirmed');
+        }
+        else if (process.platform === 'win32') {
+            await (0, externalUrl_1.openExternalSafely)('ms-settings:privacy-microphone', 'confirmed');
+        }
+    });
     // Storage
+    electron_1.ipcMain.removeAllListeners?.('storage:get-items-sync');
+    electron_1.ipcMain.on('storage:get-items-sync', (event) => {
+        const s = event?.sender;
+        const trusted = Boolean(s) &&
+            !s.isDestroyed?.() &&
+            s.getType?.() !== 'webview' &&
+            isAuthorizedHubMainFrameEvent(event);
+        if (!trusted) {
+            event.returnValue = {};
+            return;
+        }
+        try {
+            const storagePath = storageManager.storagePath;
+            if (storagePath && fsSync.existsSync(storagePath)) {
+                event.returnValue = JSON.parse(fsSync.readFileSync(storagePath, 'utf-8'));
+                return;
+            }
+        }
+        catch {
+            // Fall through to empty object
+        }
+        event.returnValue = {};
+    });
     electron_1.ipcMain.handle('storage:get-items', async () => {
         return storageManager.getItems();
     });
     electron_1.ipcMain.handle('storage:update-items', async (_event, changes) => {
         await storageManager.updateItems(changes);
     });
+    // ─── Custom Models Handlers ───────────────────────────────────────────────
     electron_1.ipcMain.handle('storage:get-custom-models', async () => {
         const geminiDir = path.join(electron_1.app.getPath('home'), '.gemini', 'antigravity');
         const filePath = path.join(geminiDir, 'custom_models.json');
@@ -226,9 +451,8 @@ function registerIpcHandlers(storageManager) {
             const content = await fs.readFile(filePath, 'utf-8');
             const parsed = JSON.parse(content);
             const models = parsed.models || [];
-            // Return models with masked API keys and keyValid flag to UI
             return models.map((m) => {
-                let maskedKey = m.apiKey;
+                let maskedKey = m.apiKey || '';
                 let keyValid = true;
                 if (m.apiKey && m.apiKey !== 'none') {
                     const decrypted = cryptoStore.decryptString(m.apiKey);
@@ -265,25 +489,21 @@ function registerIpcHandlers(storageManager) {
                 models = parsed.models || [];
             }
             catch {
-                // Ignore if file doesn't exist
+                // File does not exist yet
             }
-            // Sanitize model identifier (clean leading models/ prefix)
             const rawId = (newModel.externalModelName || newModel.name || '').trim();
             const cleanId = rawId.replace(/^models\//, '').trim();
             newModel.name = 'models/' + cleanId;
             newModel.externalModelName = cleanId;
-            // Auto-fill friendly display name if empty
             if (!newModel.displayName || !newModel.displayName.trim()) {
                 newModel.displayName = cleanId;
             }
-            // Handle rename if originalModelName is provided and different from newModel.name
             const originalIdx = newModel.originalModelName && newModel.originalModelName !== newModel.name
-                ? models.findIndex((m) => m.name === newModel.originalModelName || m.name === 'models/' + newModel.originalModelName.replace(/^models\//, ''))
+                ? models.findIndex((m) => m.name === newModel.originalModelName ||
+                    m.name === 'models/' + newModel.originalModelName.replace(/^models\//, ''))
                 : -1;
-            // Check if model already exists under target name
             const existingIdx = models.findIndex((m) => m.name === newModel.name);
             const targetOld = originalIdx !== -1 ? models[originalIdx] : existingIdx !== -1 ? models[existingIdx] : undefined;
-            // Edit collision protection: If new key is masked/empty and old record exists, preserve old encrypted key
             const isMaskedOrEmpty = !newModel.apiKey ||
                 newModel.apiKey === 'none' ||
                 newModel.apiKey.includes('...') ||
@@ -301,11 +521,9 @@ function registerIpcHandlers(storageManager) {
                     newModel.encrypted = true;
                 }
             }
-            // Clean up original entry if renamed
             if (originalIdx !== -1) {
                 models.splice(originalIdx, 1);
             }
-            // Clean up helper property
             delete newModel.originalModelName;
             const updatedIdx = models.findIndex((m) => m.name === newModel.name);
             if (updatedIdx !== -1) {
@@ -334,7 +552,7 @@ function registerIpcHandlers(storageManager) {
                 models = parsed.models || [];
             }
             catch {
-                // Ignore if file doesn't exist
+                // Ignore if file missing
             }
             const cleanTarget = modelName.replace(/^models\//, '').trim();
             models = models.filter((m) => {
@@ -360,7 +578,8 @@ function registerIpcHandlers(storageManager) {
             const encryptedKey = cryptoStore.encryptString(newApiKey.trim());
             let updatedCount = 0;
             for (const m of models) {
-                if (m.provider === provider || (provider === 'openrouter' && (m.apiUrl?.includes('openrouter') || m.provider === 'openrouter'))) {
+                if (m.provider === provider ||
+                    (provider === 'openrouter' && (m.apiUrl?.includes('openrouter') || m.provider === 'openrouter'))) {
                     m.apiKey = encryptedKey;
                     m.encrypted = true;
                     updatedCount++;
@@ -373,8 +592,6 @@ function registerIpcHandlers(storageManager) {
             return { success: false, error: err.message };
         }
     });
-    // Gravity Auto Switch policy. The detailed policy is intentionally separate from
-    // custom_models.json so routing preferences never expose or duplicate API keys.
     electron_1.ipcMain.handle('autoSwitch:get-policy', async () => {
         return (0, config_1.loadAutoSwitchPolicy)((0, config_1.getAutoSwitchConfigPath)(electron_1.app.getPath('home')));
     });
@@ -387,12 +604,6 @@ function registerIpcHandlers(storageManager) {
         policy.enabled = enabled === true;
         return (0, config_1.saveAutoSwitchPolicy)(filePath, policy);
     });
-    /**
-     * Probes one of the user's own models and reports what it can actually do.
-     *
-     * This runs in main because the stored API key is encrypted and the renderer
-     * only ever sees a masked version of it.
-     */
     electron_1.ipcMain.handle('autoSwitch:verify-model', async (_event, modelName) => {
         try {
             const model = await findStoredModel(modelName);
@@ -410,8 +621,6 @@ function registerIpcHandlers(storageManager) {
                 allowUnauthorized: model.allowUnauthorized,
             };
             const result = await (0, verifier_1.verifyModel)(verifiable, apiKey);
-            // A passing probe is the only thing that may enable a route, which is
-            // what makes "Save" safe for someone who does not know these providers.
             const route = { ...result.route, enabled: result.ok };
             if (result.ok)
                 await upsertRoute(route);
@@ -419,20 +628,16 @@ function registerIpcHandlers(storageManager) {
         }
         catch (err) {
             main_1.default.error('[Auto Switch] Verification handler failed:', err);
-            return { ok: false, messages: ['Verification could not be completed. Check the model details and try again.'] };
+            return { ok: false, messages: ['Verification could not be completed. Check model details and retry.'] };
         }
     });
     electron_1.ipcMain.handle('autoSwitch:reverify-stale', async () => reverifyStaleRoutes());
-    // P3-17: Test model connectivity — sends a lightweight HEAD/GET to the model endpoint
     electron_1.ipcMain.handle('storage:test-model-connection', async (_event, model) => {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
         const https = require('https');
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
         const http = require('http');
         return new Promise((resolve) => {
             try {
                 let urlStr = model.apiUrl;
-                // Normalize URL for chat API endpoints
                 if (model.provider === 'openai' || model.provider === 'custom' || model.provider === 'ollama') {
                     if (!urlStr.toLowerCase().includes('/chat/completions') && !urlStr.toLowerCase().includes('/completions')) {
                         if (urlStr.endsWith('/v1')) {
@@ -456,7 +661,6 @@ function registerIpcHandlers(storageManager) {
                     timeout: 10000,
                     rejectUnauthorized: !model.allowUnauthorized,
                 };
-                // Add auth header
                 let key = model.apiKey;
                 const isMaskedOrEmpty = !key ||
                     key === 'none' ||
@@ -468,25 +672,20 @@ function registerIpcHandlers(storageManager) {
                     try {
                         const geminiDir = path.join(electron_1.app.getPath('home'), '.gemini', 'antigravity');
                         const filePath = path.join(geminiDir, 'custom_models.json');
-                        // eslint-disable-next-line @typescript-eslint/no-var-requires
-                        const content = require('fs').readFileSync(filePath, 'utf-8');
+                        const content = fsSync.readFileSync(filePath, 'utf-8');
                         const parsed = JSON.parse(content);
                         const found = parsed.models?.find((m) => m.name === model.name);
                         if (found?.apiKey && found.apiKey !== 'none') {
                             key = cryptoStore.decryptString(found.apiKey) || found.apiKey;
                         }
                     }
-                    catch {
-                        /* key lookup fallback */
-                    }
+                    catch { }
                 }
                 else if (key && key !== 'none') {
                     try {
                         key = cryptoStore.decryptString(key);
                     }
-                    catch {
-                        /* key might not be encrypted */
-                    }
+                    catch { }
                 }
                 if (key && key !== 'none' && !key.includes('...')) {
                     if (model.provider === 'anthropic') {
@@ -536,7 +735,6 @@ function registerIpcHandlers(storageManager) {
                         });
                     }
                     else if (code === 405) {
-                        // Method Not Allowed on chat completions endpoint (normal for HEAD/GET on POST-only endpoints)
                         resolve({
                             success: true,
                             status: code,
@@ -550,179 +748,124 @@ function registerIpcHandlers(storageManager) {
                             error: `Server returned HTTP ${code}`,
                         });
                     }
-                    res.resume(); // consume response to free memory
-                });
-                req.setTimeout(10000, () => {
-                    req.destroy();
-                    resolve({ success: false, error: 'Connection timed out after 10 seconds' });
+                    res.resume();
                 });
                 req.on('error', (err) => {
-                    let message = err.message;
-                    if (message.includes('ECONNREFUSED')) {
-                        message = 'Connection refused — server may not be running';
-                    }
-                    else if (message.includes('ENOTFOUND') || message.includes('getaddrinfo')) {
-                        message = 'Host not found — check the API URL';
-                    }
-                    else if (message.includes('CERT') || message.includes('certificate') || message.includes('SSL')) {
-                        message = 'SSL/TLS error — try enabling "allowUnauthorized" for self-signed certs';
-                    }
-                    resolve({ success: false, error: message });
+                    resolve({
+                        success: false,
+                        error: err.message || 'Connection failed',
+                    });
+                });
+                req.on('timeout', () => {
+                    req.destroy();
+                    resolve({
+                        success: false,
+                        error: 'Connection timed out after 10s',
+                    });
                 });
                 req.end();
             }
             catch (err) {
-                resolve({ success: false, error: `Invalid URL: ${err.message}` });
+                resolve({
+                    success: false,
+                    error: err.message || 'Invalid URL or configuration',
+                });
             }
         });
     });
-    // Logs
+    // ─── Other Official Handlers ───────────────────────────────────────────────
     electron_1.ipcMain.handle('logs:electron', async () => {
         try {
-            const logPath = main_1.default.transports.file.getFile().path;
-            const contents = await fs.readFile(logPath, 'utf-8');
-            return contents;
+            const logFile = main_1.default.transports.file.getFile();
+            return await fs.readFile(logFile.path, 'utf-8');
         }
-        catch (err) {
-            return `Failed to read logs: ${String(err)}`;
+        catch {
+            return '';
         }
     });
-    // Sidecar extension custom scheme
     electron_1.ipcMain.handle('extensions:send-authorities', async (_event, authorities) => {
-        customScheme_1.extensionAuthorities.clear();
-        for (const [key, value] of Object.entries(authorities)) {
-            customScheme_1.extensionAuthorities.set(key, value);
+        for (const [authority, host] of Object.entries(authorities)) {
+            customScheme_1.extensionAuthorities.set(authority, host);
         }
     });
-    // Agent
     electron_1.ipcMain.handle('agent:update-active-count', async (_event, count) => {
         (0, tray_1.updateTrayAgentCount)(count);
     });
-    // Window
     electron_1.ipcMain.handle('window:set-title-bar-overlay', async (_event, options) => {
-        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
-        if (win && process.platform === 'win32') {
-            win.setTitleBarOverlay({
-                color: options.color,
-                symbolColor: options.symbolColor,
-                height: 30,
-            });
-        }
+        const win = getTargetHubWindow();
+        win?.setTitleBarOverlay?.(options);
     });
     electron_1.ipcMain.handle('window:minimize', async () => {
-        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
-        if (win) {
-            win.minimize();
-        }
+        const win = getTargetHubWindow();
+        win?.minimize?.();
     });
     electron_1.ipcMain.handle('window:maximize', async () => {
-        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
-        if (win) {
-            win.maximize();
-        }
+        const win = getTargetHubWindow();
+        win?.maximize?.();
     });
     electron_1.ipcMain.handle('window:unmaximize', async () => {
-        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
-        if (win) {
-            win.unmaximize();
-        }
+        const win = getTargetHubWindow();
+        win?.unmaximize?.();
     });
     electron_1.ipcMain.handle('window:is-maximized', async () => {
-        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
-        return win ? win.isMaximized() : false;
+        const win = getTargetHubWindow();
+        return win?.isMaximized?.() ?? false;
     });
     electron_1.ipcMain.handle('window:close', async () => {
-        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
-        if (win) {
-            win.close();
+        const win = getTargetHubWindow();
+        win?.close?.();
+    });
+    electron_1.ipcMain.handle('window:toggle-devtools', async (event) => {
+        const sender = event?.sender;
+        if (sender && !sender.isDestroyed?.()) {
+            sender.toggleDevTools?.();
         }
     });
-    electron_1.ipcMain.handle('window:toggle-devtools', async () => {
-        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
-        if (win) {
-            win.webContents.toggleDevTools();
+    electron_1.ipcMain.on?.(WEBVIEW_DEVICE_CHOOSER_SUBSCRIBER_STATE_CHANNEL, onDeviceChooserSubscriberState);
+    electron_1.ipcMain.handle(WEBVIEW_DEVICE_CHOOSER_RESPONSE_CHANNEL, async (event, requestId, resolution) => {
+        if (!isAuthorizedHubMainFrameEvent(event)) {
+            throw new Error(`${WEBVIEW_DEVICE_CHOOSER_RESPONSE_CHANNEL} must be called from the main frame`);
         }
+        return deviceChooserController.handleResponse(event.sender.id, requestId, resolution);
     });
     let activeContextMenu = null;
     electron_1.ipcMain.handle('window:show-context-menu', async (_event, items) => {
-        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
-        if (!win || !Array.isArray(items) || items.length === 0) {
-            return null;
-        }
-        activeContextMenu?.closePopup?.(win);
+        activeContextMenu?.closePopup?.();
+        activeContextMenu = null;
         return new Promise((resolve) => {
-            let settled = false;
-            const template = buildContextMenuTemplate(items, (id) => {
-                if (!settled) {
-                    settled = true;
-                    activeContextMenu = null;
-                    resolve(id);
-                }
-            });
-            const menu = electron_1.Menu.buildFromTemplate(template);
+            let selectedId = null;
+            const menu = electron_1.Menu.buildFromTemplate(buildContextMenuTemplate(items, (id) => {
+                selectedId = id;
+            }));
             activeContextMenu = menu;
+            const win = getTargetHubWindow();
             menu.popup({
                 window: win,
                 callback: () => {
-                    setImmediate(() => {
-                        if (activeContextMenu === menu) {
-                            activeContextMenu = null;
-                        }
-                        if (!settled) {
-                            settled = true;
-                            resolve(null);
-                        }
-                    });
+                    activeContextMenu = null;
+                    resolve(selectedId);
                 },
             });
         });
     });
     electron_1.ipcMain.handle('window:close-context-menu', () => {
-        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
-        activeContextMenu?.closePopup?.(win);
+        activeContextMenu?.closePopup?.();
         activeContextMenu = null;
     });
-    // Zoom — main-process source of truth so the level is reliably persisted
-    // across restarts on all platforms (works around a Chromium quirk on Windows
-    // where renderer-only webFrame.setZoomLevel changes aren't cached).
-    const ZOOM_LEVEL_KEY = 'zoomLevel';
-    const ZOOM_STEP = 0.5;
     electron_1.ipcMain.handle('window:zoom-in', async () => {
-        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
-        if (win) {
-            const newLevel = win.webContents.getZoomLevel() + ZOOM_STEP;
-            win.webContents.setZoomLevel(newLevel);
-            await storageManager.updateItems({
-                [ZOOM_LEVEL_KEY]: String(newLevel),
-            });
-        }
+        await (0, hubZoom_1.applyHubWindowZoom)(getTargetHubWindow(), 'in');
     });
     electron_1.ipcMain.handle('window:zoom-out', async () => {
-        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
-        if (win) {
-            const newLevel = win.webContents.getZoomLevel() - ZOOM_STEP;
-            win.webContents.setZoomLevel(newLevel);
-            await storageManager.updateItems({
-                [ZOOM_LEVEL_KEY]: String(newLevel),
-            });
-        }
+        await (0, hubZoom_1.applyHubWindowZoom)(getTargetHubWindow(), 'out');
     });
     electron_1.ipcMain.handle('window:reset-zoom', async () => {
-        const win = electron_1.BrowserWindow.getFocusedWindow() || electron_1.BrowserWindow.getAllWindows()[0];
-        if (win) {
-            win.webContents.setZoomLevel(0);
-            await storageManager.updateItems({ [ZOOM_LEVEL_KEY]: String(0) });
-        }
+        await (0, hubZoom_1.applyHubWindowZoom)(getTargetHubWindow(), 'reset');
     });
-    // Auto-updater manual check
     electron_1.ipcMain.handle('updater:check-for-updates', () => {
         (0, updater_1.checkForUpdates)(true);
     });
-    // Safe external shell launch
     electron_1.ipcMain.handle('shell:open-external', async (_event, url) => {
-        if (url.startsWith('https://') || url.startsWith('http://') || url.startsWith('antigravity-ide://')) {
-            await electron_1.shell.openExternal(url);
-        }
+        await (0, externalUrl_1.openExternalSafely)(url, 'confirmed');
     });
     electron_1.ipcMain.handle('shell:reveal-in-file-picker', (_event, filePath) => {
         const distro = (0, wsl_1.getActiveWslDistro)();
@@ -733,10 +876,126 @@ function registerIpcHandlers(storageManager) {
         }
         electron_1.shell.showItemInFolder((0, url_1.fileURLToPath)(filePath));
     });
-    // IDE installation check
+    const assertTopLevelSenderId = (event, channel) => {
+        if (event?.senderFrame?.parent) {
+            throw new Error(`Unauthorized ${channel} sender: subframe cannot invoke ${channel}`);
+        }
+        const sender = event?.sender;
+        if (!sender || sender.isDestroyed?.() || typeof sender.id !== 'number' || !Number.isInteger(sender.id)) {
+            throw new Error(`Unauthorized ${channel} sender`);
+        }
+        return sender.id;
+    };
+    electron_1.ipcMain.handle('webview:set-download-dir', (event, webContentsId, downloadDir) => {
+        if (typeof webContentsId !== 'number' || !Number.isInteger(webContentsId) || webContentsId <= 0) {
+            throw new Error(`Invalid webContentsId: ${String(webContentsId)}`);
+        }
+        if (downloadDir !== null && typeof downloadDir !== 'string') {
+            throw new Error('downloadDir must be a string or null');
+        }
+        if (event?.senderFrame?.parent) {
+            throw new Error('Unauthorized webview:set-download-dir sender: subframe cannot configure downloads');
+        }
+        const sender = event?.sender;
+        if (!sender || sender.isDestroyed?.()) {
+            throw new Error(`WebContents ${webContentsId} is not owned by the calling renderer`);
+        }
+        const wc = electron_1.webContents.fromId(webContentsId);
+        if (!isOwnedBrowserGuestWebContents(wc, sender.id)) {
+            throw new Error(`WebContents ${webContentsId} is not owned by the calling renderer`);
+        }
+        return setGuestDownloadDirectory(wc, downloadDir);
+    });
+    electron_1.ipcMain.handle('webview:set-agent-controlled', (event, webContentsId, active) => {
+        if (typeof webContentsId !== 'number' || !Number.isInteger(webContentsId) || webContentsId <= 0 || typeof active !== 'boolean') {
+            return false;
+        }
+        if (event?.senderFrame?.parent) {
+            return false;
+        }
+        const sender = event?.sender;
+        if (!sender || sender.isDestroyed?.()) {
+            return false;
+        }
+        const wc = electron_1.webContents.fromId(webContentsId);
+        if (!wc || !isOwnedBrowserGuestWebContents(wc, sender.id)) {
+            return false;
+        }
+        return setGuestAgentControlled(wc, active);
+    });
+    electron_1.ipcMain.handle('webview:open-download', async (event, downloadId) => {
+        const senderId = assertTopLevelSenderId(event, 'webview:open-download');
+        if (typeof downloadId !== 'string') {
+            throw new Error('downloadId must be a string');
+        }
+        return openTrackedWebviewDownload(senderId, downloadId);
+    });
+    electron_1.ipcMain.handle('webview:show-download-in-folder', (event, downloadId) => {
+        const senderId = assertTopLevelSenderId(event, 'webview:show-download-in-folder');
+        if (typeof downloadId !== 'string') {
+            throw new Error('downloadId must be a string');
+        }
+        return showTrackedWebviewDownloadInFolder(senderId, downloadId);
+    });
+    electron_1.ipcMain.handle('webview:cancel-download', (event, downloadId) => {
+        const senderId = assertTopLevelSenderId(event, 'webview:cancel-download');
+        if (typeof downloadId !== 'string') {
+            throw new Error('downloadId must be a string');
+        }
+        return cancelTrackedWebviewDownload(senderId, downloadId);
+    });
+    electron_1.ipcMain.handle('webview:resolve-download', (event, downloadId, approve) => {
+        let senderId;
+        try {
+            senderId = assertTopLevelSenderId(event, 'webview:resolve-download');
+        }
+        catch {
+            return false;
+        }
+        if (typeof downloadId !== 'string' || typeof approve !== 'boolean') {
+            return false;
+        }
+        return resolveTrackedWebviewDownload(senderId, downloadId, approve);
+    });
+    electron_1.ipcMain.handle('dialog:select-download-dir', async (event, defaultPath) => {
+        assertTopLevelSenderId(event, 'dialog:select-download-dir');
+        let resolvedDefaultPath;
+        if (typeof defaultPath === 'string' && defaultPath.trim().length > 0 && !defaultPath.includes('\0')) {
+            resolvedDefaultPath = defaultPath.trim();
+        }
+        else {
+            try {
+                resolvedDefaultPath = electron_1.app.getPath('downloads');
+            }
+            catch {
+                resolvedDefaultPath = undefined;
+            }
+        }
+        const options = {
+            properties: ['openDirectory', 'createDirectory'],
+            title: 'Select Download Folder',
+            defaultPath: resolvedDefaultPath,
+        };
+        const owner = electron_1.BrowserWindow.fromWebContents(event.sender);
+        const result = owner
+            ? await electron_1.dialog.showOpenDialog(owner, options)
+            : await electron_1.dialog.showOpenDialog(null, options);
+        if (result.canceled || result.filePaths.length === 0) {
+            return null;
+        }
+        const picked = result.filePaths[0];
+        if (typeof picked !== 'string' || picked.includes('\0') || !path.isAbsolute(picked)) {
+            return null;
+        }
+        try {
+            return (await fs.stat(picked)).isDirectory() ? picked : null;
+        }
+        catch {
+            return null;
+        }
+    });
     electron_1.ipcMain.handle('ide:is-installed', async () => {
         try {
-            // Check standard installation path (works even if the app has never been launched).
             await fs.stat((0, constants_1.getIdeInstallPath)());
             return true;
         }
@@ -744,8 +1003,57 @@ function registerIpcHandlers(storageManager) {
             return false;
         }
     });
-    // WSL environment switching (Windows only). Lets the web UI (e.g. the
-    // Settings page) discover WSL distros and relaunch the app into/out of one.
+    electron_1.ipcMain.handle('webview:get-memory-usage', async (event, webContentsIds) => {
+        const sender = event?.sender;
+        if (!sender ||
+            sender.isDestroyed() ||
+            event?.senderFrame?.parent ||
+            (event?.senderFrame && sender.mainFrame && event.senderFrame !== sender.mainFrame) ||
+            !Array.isArray(webContentsIds) ||
+            webContentsIds.length === 0) {
+            return {};
+        }
+        const MAX_QUERIED_GUESTS = 64;
+        const seenIds = new Set();
+        const ownedGuests = [];
+        for (const rawId of webContentsIds) {
+            if (seenIds.size >= MAX_QUERIED_GUESTS) {
+                break;
+            }
+            if (typeof rawId !== 'number' || !Number.isInteger(rawId) || rawId <= 0 || seenIds.has(rawId)) {
+                continue;
+            }
+            seenIds.add(rawId);
+            const wc = electron_1.webContents.fromId(rawId);
+            const isWcv = wcvBrowserRegistry.isRegisteredWcv(rawId);
+            if (!wc || wc.isDestroyed() || (wc.getType?.() !== 'webview' && !isWcv)) {
+                continue;
+            }
+            const isOwned = isWcv
+                ? wcvBrowserRegistry.isOwnedBySender(rawId, sender.id)
+                : Boolean(sender.id !== undefined && wc.hostWebContents?.id === sender.id);
+            if (!isOwned) {
+                continue;
+            }
+            let pid;
+            try {
+                pid = wc.getOSProcessId?.();
+            }
+            catch {
+                pid = undefined;
+            }
+            ownedGuests.push({ webContentsId: rawId, pid });
+        }
+        if (ownedGuests.length === 0) {
+            return {};
+        }
+        const bytesByWcId = wcvBrowserRegistry.computeGuestMemoryBytes(ownedGuests);
+        const out = {};
+        for (const [id, bytes] of bytesByWcId.entries()) {
+            out[id] = bytes;
+        }
+        return out;
+    });
     electron_1.ipcMain.handle('wsl:get-state', async () => {
         if (!(0, wsl_1.isWslAvailable)()) {
             return { available: false, activeDistro: null, distros: [] };
@@ -754,7 +1062,7 @@ function registerIpcHandlers(storageManager) {
             const distros = await (0, wsl_1.listWslDistros)();
             return {
                 available: true,
-                activeDistro: (0, wsl_1.getActiveWslDistro)() || null,
+                activeDistro: (0, wsl_1.getActiveWslDistro)() ?? null,
                 distros: distros.map((d) => ({ name: d.name, isDefault: d.isDefault })),
             };
         }
@@ -763,132 +1071,205 @@ function registerIpcHandlers(storageManager) {
             return { available: false, activeDistro: null, distros: [] };
         }
     });
-    // Relaunches into the given distro, or locally when `distro` is empty.
     electron_1.ipcMain.handle('wsl:connect', (_event, distro) => {
         (0, menu_1.relaunchWithWslDistro)(distro || '');
     });
-}
-function getCustomModelsPath() {
-    return path.join(electron_1.app.getPath('home'), '.gemini', 'antigravity', 'custom_models.json');
-}
-async function readStoredModels() {
-    try {
-        const content = await fs.readFile(getCustomModelsPath(), 'utf-8');
-        const parsed = JSON.parse(content);
-        return parsed.models || [];
-    }
-    catch {
-        return [];
-    }
-}
-async function findStoredModel(modelName) {
-    const models = await readStoredModels();
-    return models.find((m) => m.name === modelName);
-}
-async function decryptStoredKey(model) {
-    const apiKey = model.apiKey || '';
-    if (!apiKey || apiKey === 'none')
-        return apiKey;
-    try {
-        return cryptoStore.decryptString(apiKey);
-    }
-    catch {
-        // Entries saved before encryption was introduced are already plaintext.
-        return apiKey;
-    }
-}
-/**
- * Re-checks routes whose verification has aged past the user's window.
- *
- * A route that no longer passes is disabled rather than silently trusted, so a
- * revoked key or retired model degrades into "use my manual choice" instead of
- * failing every request. Safe to call when Auto Switch is unused: it exits early.
- */
-async function reverifyStaleRoutes() {
-    const filePath = (0, config_1.getAutoSwitchConfigPath)(electron_1.app.getPath('home'));
-    const policy = (0, config_1.loadAutoSwitchPolicy)(filePath);
-    if (policy.reverifyDays <= 0 || policy.routes.length === 0)
-        return { checked: 0, failed: [] };
-    const cutoff = Date.now() - policy.reverifyDays * 24 * 60 * 60 * 1000;
-    const stale = policy.routes.filter((route) => route.enabled && route.verified.verifiedAt < cutoff);
-    if (stale.length === 0)
-        return { checked: 0, failed: [] };
-    const failed = [];
-    for (const route of stale) {
-        const model = await findStoredModel(route.id);
-        if (!model) {
-            failed.push(route.displayName);
-            route.enabled = false;
-            continue;
+    const MIN_ISOLATED_WORLD_ID = 1000;
+    const MAX_ISOLATED_WORLD_ID = 100000;
+    electron_1.ipcMain.handle('webview:execute-js-isolated-world', async (event, webContentsId, worldId, code) => {
+        if (typeof webContentsId !== 'number' || !Number.isInteger(webContentsId) || webContentsId <= 0) {
+            throw new Error(`Invalid webContentsId: ${String(webContentsId)}`);
         }
-        const apiKey = await decryptStoredKey(model);
-        const result = await (0, verifier_1.verifyModel)({
-            name: model.name,
-            displayName: model.displayName,
-            provider: model.provider,
-            apiKey,
-            apiUrl: model.apiUrl,
-            externalModelName: model.externalModelName,
-            allowUnauthorized: model.allowUnauthorized,
-        }, apiKey);
-        Object.assign(route, result.route, { enabled: result.ok });
-        if (!result.ok)
-            failed.push(route.displayName);
-    }
-    // Turning routing off when nothing verified remains keeps the policy savable
-    // and leaves the user on their own model choice instead of a broken route.
-    if (!policy.routes.some((route) => route.enabled && route.verified.reachable)) {
-        policy.mode = 'off';
-        policy.chatMode = 'manual';
-        policy.enabled = false;
-    }
-    (0, config_1.saveAutoSwitchPolicy)(filePath, policy);
-    return { checked: stale.length, failed };
-}
-/**
- * Startup entry point for the optional 30-day re-check.
- *
- * Runs detached and never rejects, because Auto Switch maintenance must not be
- * able to delay or break application launch.
- */
-function scheduleAutoSwitchReverification() {
-    setTimeout(() => {
-        void reverifyStaleRoutes()
-            .then(({ checked, failed }) => {
-            if (checked === 0)
-                return;
-            main_1.default.info(`[Auto Switch] Re-verified ${checked} model(s); ${failed.length} failed.`);
-            if (failed.length === 0 || !electron_1.Notification.isSupported())
-                return;
-            new electron_1.Notification({
-                title: 'Gravity Auto Switch needs attention',
-                body: `${failed.join(', ')} stopped responding and ${failed.length === 1 ? 'was' : 'were'} switched off. Open Customization to verify ${failed.length === 1 ? 'it' : 'them'} again.`,
-            }).show();
-        })
-            .catch((err) => main_1.default.error('[Auto Switch] Scheduled re-verification failed:', err));
-    }, 15000).unref?.();
-}
-/**
- * Stores a freshly verified route without disturbing the user's other settings.
- * Verification results are written immediately so a passing probe is never lost
- * if the window is closed before Save.
- */
-async function upsertRoute(route) {
-    const filePath = (0, config_1.getAutoSwitchConfigPath)(electron_1.app.getPath('home'));
-    const policy = (0, config_1.loadAutoSwitchPolicy)(filePath);
-    const index = policy.routes.findIndex((existing) => existing.id === route.id);
-    if (index === -1) {
-        const highestPriority = policy.routes
-            .filter((existing) => existing.tier === route.tier)
-            .reduce((highest, existing) => Math.max(highest, existing.priority), 0);
-        policy.routes.push({ ...route, priority: highestPriority + 1 });
-    }
-    else {
-        // Verification refreshes facts about the model, never the user's chosen
-        // tier, primary, or fallback placement.
-        const existing = policy.routes[index];
-        policy.routes[index] = { ...route, tier: existing.tier, priority: existing.priority, enabled: existing.enabled };
-    }
-    (0, config_1.saveAutoSwitchPolicy)(filePath, policy);
+        if (typeof worldId !== 'number' ||
+            !Number.isInteger(worldId) ||
+            worldId < MIN_ISOLATED_WORLD_ID ||
+            worldId > MAX_ISOLATED_WORLD_ID) {
+            throw new Error(`Invalid isolated worldId: ${String(worldId)}`);
+        }
+        if (typeof code !== 'string') {
+            throw new Error('code must be a string');
+        }
+        const wc = electron_1.webContents.fromId(webContentsId);
+        const isWcv = wcvBrowserRegistry.isRegisteredWcv(webContentsId);
+        if (!wc || wc.isDestroyed() || (wc.getType?.() !== 'webview' && !isWcv)) {
+            throw new Error(`Invalid or non-webview webContents id: ${webContentsId}`);
+        }
+        const sender = event?.sender;
+        const isOwned = isWcv
+            ? wcvBrowserRegistry.isOwnedBySender(webContentsId, sender?.id)
+            : wc.hostWebContents?.id === sender?.id;
+        if (!sender || sender.isDestroyed() || !isOwned) {
+            throw new Error(`WebContents ${webContentsId} is not owned by the calling renderer`);
+        }
+        if (!event?.senderFrame || event.senderFrame !== sender.mainFrame || event.senderFrame.parent) {
+            throw new Error('webview:execute-js-isolated-world must be called from the main frame');
+        }
+        return executeJavaScriptInIsolatedWorldWhenReady(wc, worldId, [{ code }], false);
+    });
+    const resolveOwnedGuestWebContents = (event, webContentsId) => {
+        if (typeof webContentsId !== 'number' || !Number.isInteger(webContentsId) || webContentsId <= 0) {
+            throw new Error(`Invalid webContentsId: ${String(webContentsId)}`);
+        }
+        const wc = electron_1.webContents.fromId(webContentsId);
+        const isWcv = wcvBrowserRegistry.isRegisteredWcv(webContentsId);
+        if (!wc || wc.isDestroyed() || (wc.getType?.() !== 'webview' && !isWcv)) {
+            throw new Error(`Invalid or non-webview webContents id: ${webContentsId}`);
+        }
+        const sender = event?.sender;
+        const isOwned = isWcv
+            ? wcvBrowserRegistry.isOwnedBySender(webContentsId, sender?.id)
+            : wc.hostWebContents?.id === sender?.id;
+        if (!sender || sender.isDestroyed() || !isOwned) {
+            throw new Error(`WebContents ${webContentsId} is not owned by the calling renderer`);
+        }
+        return { wc, sender };
+    };
+    electron_1.ipcMain.handle('webview:get-network-requests', (event, webContentsId) => {
+        const { wc, sender } = resolveOwnedGuestWebContents(event, webContentsId);
+        if (!event?.senderFrame || (sender.mainFrame && event.senderFrame !== sender.mainFrame) || event.senderFrame.parent) {
+            throw new Error('webview:get-network-requests must be called from the main frame');
+        }
+        return guestNetworkController.getRequests(wc.id);
+    });
+    electron_1.ipcMain.handle('webview:clear-network-requests', (event, webContentsId) => {
+        const { wc, sender } = resolveOwnedGuestWebContents(event, webContentsId);
+        if (!event?.senderFrame || (sender.mainFrame && event.senderFrame !== sender.mainFrame) || event.senderFrame.parent) {
+            throw new Error('webview:clear-network-requests must be called from the main frame');
+        }
+        return guestNetworkController.clearRequests(wc.id);
+    });
+    const guestOf = (e, id) => {
+        const { wc, sender } = resolveOwnedGuestWebContents(e, id);
+        const f = e?.senderFrame;
+        if (!f || f.parent || (sender.mainFrame && f !== sender.mainFrame)) {
+            throw new Error('WebMCP IPC must be called from the main frame');
+        }
+        return { wc, sender };
+    };
+    electron_1.ipcMain.handle('webview:webmcp-set-enabled', (event, enabled) => {
+        if (!isAuthorizedHubMainFrameEvent(event) || typeof enabled !== 'boolean') {
+            throw new Error('Invalid webview:webmcp-set-enabled call');
+        }
+        guestWebMcpController.setEnabled(enabled);
+        return guestWebMcpController.isEnabled();
+    });
+    electron_1.ipcMain.handle('webview:webmcp-list-tools', (event, webContentsId, origin) => guestWebMcpController.listTools(guestOf(event, webContentsId).wc, origin));
+    electron_1.ipcMain.handle('webview:webmcp-call-tool', (event, webContentsId, origin, params) => {
+        const { wc, sender } = guestOf(event, webContentsId);
+        return guestWebMcpController.callTool(wc, sender, origin, params);
+    });
+    electron_1.ipcMain.handle('webview:webmcp-cancel-tool-call', (event, webContentsId, callId) => guestWebMcpController.cancelToolCall(webContentsId, callId, guestOf(event, webContentsId).sender.id));
+    electron_1.ipcMain.handle('webview:set-dialog-policy', async (event, webContentsId, policy) => {
+        const { wc, sender } = resolveOwnedGuestWebContents(event, webContentsId);
+        const safePolicy = {
+            enabled: Boolean(policy?.enabled),
+        };
+        if (policy?.action === 'accept' || policy?.action === 'dismiss' || policy?.action === 'manual') {
+            safePolicy.action = policy.action;
+        }
+        if (typeof policy?.promptText === 'string') {
+            safePolicy.promptText = policy.promptText;
+        }
+        if (typeof policy?.tabKey === 'string') {
+            safePolicy.tabKey = policy.tabKey;
+        }
+        if (policy?.fallbackAction === 'accept' || policy?.fallbackAction === 'dismiss') {
+            safePolicy.fallbackAction = policy.fallbackAction;
+        }
+        if (typeof policy?.fallbackPromptText === 'string') {
+            safePolicy.fallbackPromptText = policy.fallbackPromptText;
+        }
+        return guestDialogController.setPolicy(wc, sender, safePolicy);
+    });
+    electron_1.ipcMain.handle('webview:handle-javascript-dialog', async (event, webContentsId, decision) => {
+        const { wc } = resolveOwnedGuestWebContents(event, webContentsId);
+        return guestDialogController.handleDialog(wc, {
+            ...(typeof decision?.dialogId === 'string' ? { dialogId: decision.dialogId } : {}),
+            accept: Boolean(decision?.accept),
+            ...(typeof decision?.promptText === 'string' ? { promptText: decision.promptText } : {}),
+        });
+    });
+    electron_1.ipcMain.removeListener?.(HUMAN_PROMPT_SYNC_CHANNEL, onHumanPromptSync);
+    electron_1.ipcMain.on?.(HUMAN_PROMPT_SYNC_CHANNEL, onHumanPromptSync);
+    electron_1.ipcMain.removeListener?.(WEBVIEW_PROMPT_SUBSCRIBER_STATE_CHANNEL, onHumanPromptSubscriberState);
+    electron_1.ipcMain.on?.(WEBVIEW_PROMPT_SUBSCRIBER_STATE_CHANNEL, onHumanPromptSubscriberState);
+    electron_1.ipcMain.handle(WEBVIEW_PROMPT_RESPONSE_CHANNEL, (event, promptId, value) => {
+        if (!isMainFramePromptCaller(event)) {
+            throw new Error('webview:prompt-response must be called from the main frame');
+        }
+        return guestPromptController.respondPrompt(event.sender.id, promptId, typeof value === 'string' ? value : null);
+    });
+    const assertMainFrameSender = (event, channel) => {
+        const sender = event?.sender;
+        if (!sender ||
+            sender.isDestroyed() ||
+            !event?.senderFrame ||
+            event.senderFrame !== sender.mainFrame ||
+            event.senderFrame.parent) {
+            throw new Error(`${channel} must be called from the main frame`);
+        }
+    };
+    const pinUploadsRoot = (conversationId) => {
+        if (typeof conversationId !== 'string' || !SAFE_UPLOAD_CONVERSATION_ID_RE.test(conversationId) || /^\.+$/.test(conversationId)) {
+            return '';
+        }
+        let appDataDir = (0, paths_1.getAppDataDir)();
+        try {
+            appDataDir = fsSync.realpathSync(appDataDir);
+        }
+        catch { }
+        return path.join(appDataDir, 'brain', conversationId, 'browser_sandbox', 'uploads');
+    };
+    const resolveMainFrameOwnedGuest = (event, webContentsId, channel) => {
+        const { wc, sender } = resolveOwnedGuestWebContents(event, webContentsId);
+        assertMainFrameSender(event, channel);
+        return { wc, sender };
+    };
+    electron_1.ipcMain.handle('webview:set-file-chooser-policy', async (event, webContentsId, policy) => {
+        const { wc, sender } = resolveMainFrameOwnedGuest(event, webContentsId, 'webview:set-file-chooser-policy');
+        return guestFileChooserController.setPolicy(wc, sender, {
+            enabled: Boolean(policy?.enabled),
+            ...(typeof policy?.tabKey === 'string' ? { tabKey: policy.tabKey } : {}),
+        });
+    });
+    electron_1.ipcMain.handle('webview:handle-file-chooser', async (event, webContentsId, decision) => {
+        const { wc } = resolveMainFrameOwnedGuest(event, webContentsId, 'webview:handle-file-chooser');
+        const pinned = { ...(decision ?? { chooserId: '' }) };
+        if (Array.isArray(pinned.files) && pinned.files.length > 0) {
+            pinned.allowedUploadsDir = pinUploadsRoot(pinned.expectedConversationId);
+        }
+        return guestFileChooserController.handleFileChooser(wc, pinned);
+    });
+    electron_1.ipcMain.handle('webview:set-input-files', async (event, webContentsId, request) => {
+        const { wc } = resolveMainFrameOwnedGuest(event, webContentsId, 'webview:set-input-files');
+        return guestFileChooserController.setInputFiles(wc, {
+            ...request,
+            allowedUploadsDir: pinUploadsRoot(request?.expectedConversationId),
+        });
+    });
+    electron_1.ipcMain.handle('webview:resolve-upload-files', (event, req) => {
+        assertMainFrameSender(event, 'webview:resolve-upload-files');
+        return resolveGuestUploadFiles(req && {
+            ...req,
+            uploadsRoot: pinUploadsRoot(req.expectedConversationId),
+        });
+    });
+    const assertMainFrameGuestCaller = (event, webContentsId, channel) => resolveMainFrameOwnedGuest(event, webContentsId, channel).wc;
+    electron_1.ipcMain.handle('webview:list-frames', async (event, wcId) => guestFrameBridge.listFrames(assertMainFrameGuestCaller(event, wcId, 'webview:list-frames')));
+    electron_1.ipcMain.handle('webview:execute-js-frame-isolated-world', async (event, wcId, frameId, code, expectedOrigin) => {
+        const channel = 'webview:execute-js-frame-isolated-world';
+        const wc = assertMainFrameGuestCaller(event, wcId, channel);
+        return guestFrameBridge.executeInFrameIsolatedWorld(wc, frameId, code, expectedOrigin);
+    });
+    electron_1.ipcMain.handle('script-jail:run', async (event, req) => {
+        return runScriptInJail(event?.sender, req, event?.senderFrame);
+    });
+    electron_1.ipcMain.handle('script-jail:abort', (event, jailId) => {
+        return abortScriptInJail(event?.sender, jailId, event?.senderFrame);
+    });
+    electron_1.ipcMain.handle('script-jail:warm', async (event) => {
+        return warmScriptJail(event?.sender, event?.senderFrame);
+    });
+    registerWcvIpcHandlers(undefined, undefined, storageManager);
 }
 //# sourceMappingURL=ipcHandlers.js.map

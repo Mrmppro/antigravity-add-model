@@ -1,6 +1,6 @@
 import { execFile, spawn, ChildProcess } from 'child_process';
 import { app, session, shell } from 'electron';
-import { shellEnvSync } from 'shell-env';
+import { shellEnv } from 'shell-env';
 import * as fs from 'fs';
 import path from 'path';
 import * as readline from 'readline';
@@ -181,18 +181,31 @@ function setupNodeModules(env: Record<string, string | undefined>, modules: Node
   }
 }
 
+let prefetchedShellEnv: Promise<Record<string, string>> | undefined;
+
+export function prefetchShellEnv(): void {
+  prefetchedShellEnv ??= shellEnv();
+}
+
+function takeShellEnv(): Promise<Record<string, string>> {
+  const env = prefetchedShellEnv ?? shellEnv();
+  prefetchedShellEnv = undefined;
+  return env;
+}
+
 /**
  * Spawn the language server and resolve with a LanguageServerHandle once
  * the LS reports its HTTP port. Rejects on timeout or unexpected exit
  * during startup.
  */
-export function startLanguageServer(
+export async function startLanguageServer(
   port: number,
   csrf: string,
   options: StartMonitorOptions = {},
 ): Promise<LanguageServerHandle> {
-    const { headless, hostBridgeUrl, hostBridgeToken, wsl } = options;
-    return new Promise(async (resolve, reject) => {
+  const { headless, hostBridgeUrl, hostBridgeToken, wsl } = options;
+  const loginShellEnv = await takeShellEnv();
+  return new Promise(async (resolve, reject) => {
       const logStream = fs.createWriteStream(getLsLogPath(), { flags: 'w' });
 
       let proxyPort: number | undefined;
@@ -248,7 +261,7 @@ export function startLanguageServer(
       const safeArgs = spawnArgs.map((a) => (a === csrf || (hostBridgeToken && a.includes(hostBridgeToken)) ? '***' : a));
       console.log(`\nSpawning: ${spawnCmd} ${safeArgs.join(' ')}\n`);
 
-      const env: Record<string, string | undefined> = { ...process.env, ...shellEnvSync() };
+      const env: Record<string, string | undefined> = { ...process.env, ...loginShellEnv };
       env['AGY_BROWSER_ACTIVE_PORT_FILE'] = getActivePortFilePath();
       setupNodeWrapper(env);
       setupNodeModules(env, [

@@ -13,6 +13,7 @@ Thumbs.db
 
 # Development artifacts
 scratch/
+official_2_31_0/
 
 # Compiled binary mocks
 dist/__mocks__/

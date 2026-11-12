@@ -43,6 +43,7 @@ exports.getLsProcess = getLsProcess;
 exports.getLsPort = getLsPort;
 exports.clearLsProcess = clearLsProcess;
 exports.extractCrashStackTrace = extractCrashStackTrace;
+exports.prefetchShellEnv = prefetchShellEnv;
 exports.startLanguageServer = startLanguageServer;
 exports.setIntentionalTermination = setIntentionalTermination;
 exports.startAndMonitorLanguageServer = startAndMonitorLanguageServer;
@@ -188,13 +189,23 @@ function setupNodeModules(env, modules) {
         env[mod.envVar] = entryPoint;
     }
 }
+let prefetchedShellEnv;
+function prefetchShellEnv() {
+    prefetchedShellEnv ?? (prefetchedShellEnv = (0, shell_env_1.shellEnv)());
+}
+function takeShellEnv() {
+    const env = prefetchedShellEnv ?? (0, shell_env_1.shellEnv)();
+    prefetchedShellEnv = undefined;
+    return env;
+}
 /**
  * Spawn the language server and resolve with a LanguageServerHandle once
  * the LS reports its HTTP port. Rejects on timeout or unexpected exit
  * during startup.
  */
-function startLanguageServer(port, csrf, options = {}) {
+async function startLanguageServer(port, csrf, options = {}) {
     const { headless, hostBridgeUrl, hostBridgeToken, wsl } = options;
+    const loginShellEnv = await takeShellEnv();
     return new Promise(async (resolve, reject) => {
         const logStream = fs.createWriteStream((0, paths_1.getLsLogPath)(), { flags: 'w' });
         let proxyPort;
@@ -244,7 +255,7 @@ function startLanguageServer(port, csrf, options = {}) {
         }
         const safeArgs = spawnArgs.map((a) => (a === csrf || (hostBridgeToken && a.includes(hostBridgeToken)) ? '***' : a));
         console.log(`\nSpawning: ${spawnCmd} ${safeArgs.join(' ')}\n`);
-        const env = { ...process.env, ...(0, shell_env_1.shellEnvSync)() };
+        const env = { ...process.env, ...loginShellEnv };
         env['AGY_BROWSER_ACTIVE_PORT_FILE'] = (0, paths_1.getActivePortFilePath)();
         (0, utils_1.setupNodeWrapper)(env);
         setupNodeModules(env, [

@@ -8,10 +8,21 @@ export declare function getSettingsPbPath(): string;
  */
 export declare function getAppStoragePath(): string;
 /**
+ * Returns the path to the persistent window geometry and state file.
+ */
+export declare function getWindowStatePath(): string;
+/**
  * Returns the path to the file used to communicate AGY Hub's remote debugging port.
  * Used by recording encoder.
  */
 export declare function getActivePortFilePath(): string;
+/**
+ * Best-effort POSIX hardening of `DevToolsActivePort`, which holds the CDP
+ * WebSocket secret: restricts `userDataDir` to `0o700` and `activePortFile` to
+ * `0o600`, each only if it exists, is owned by the current user, and is looser.
+ * Never throws.
+ */
+export declare function tightenActivePortPermissions(userDataDir: string, activePortFile: string): void;
 export declare function getLsLogPath(): string;
 /** User data dir for the old IDE (source for copy). */
 export declare const IDE_OLD_DATA_DIR: string;

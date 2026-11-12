@@ -1,13 +1,15 @@
-# Antigravity Custom Model Enabler (v2.23.0)
+# Antigravity Custom Model Enabler (v2.31.0)
+
+[English](README.md) | [فارسی](README.fa.md)
 
 > **Unofficial compatibility patch.** This independent project is not affiliated
 > with, endorsed by, or supported by Google. “Google” and “Antigravity” are used
 > only to describe compatible products; their respective trademark owners retain
 > all rights.
 
-This repository contains a compatibility patch for **Google Antigravity (v2.23.0)** and **Antigravity IDE (v1.107.0)** that enables external AI models (OpenAI, Anthropic, OpenRouter, DeepSeek, Groq, Mistral, Cerebras, Kimi, Fireworks AI, Ollama, LM Studio, llama.cpp, NVIDIA NIM, Google AI Studio, and any OpenAI-compatible provider) alongside the built-in Gemini models. It embeds a local HTTP proxy into the Electron app, reverse-engineers the Cloud Code internal API (`v1internal`), translates request/response formats between providers, supports WSL 2 remote sessions on Windows, and provides an on-demand **Custom AI Models** modal (`Ctrl+Alt+M` / `Cmd+Option+M`) with zero DOM pollution.
+This repository contains a compatibility patch for **Google Antigravity (v2.31.0)** and **Antigravity IDE (v1.107.0)** that enables external AI models (OpenAI, Anthropic, OpenRouter, DeepSeek, Groq, Mistral, Cerebras, Kimi, Fireworks AI, Ollama, LM Studio, llama.cpp, NVIDIA NIM, Google AI Studio, and any OpenAI-compatible provider) alongside the built-in Gemini models. It embeds a local HTTP proxy into the Electron app, reverse-engineers the Cloud Code internal API (`v1internal`), translates request/response formats between providers, supports WSL 2 remote sessions on Windows, and provides an on-demand **Custom AI Models** modal (`Ctrl+Alt+M` / `Cmd+Option+M`) with zero DOM pollution.
 
-## How to Use (Quick Start — v2.23.0)
+## How to Use (Quick Start — v2.31.0)
 
 ### 1. Deploy the Patch
 
@@ -21,7 +23,7 @@ On **macOS** or **Linux**, run `npm run build` followed by `bash deploy.sh` (mac
 
 ### 2. Add & Manage Custom Models
 
-In v2.23.0, the Antigravity UI stays 100% unmodified with **no injected Settings DOM sections**. Instead, open the **Custom AI Models** modal on demand from anywhere:
+In v2.31.0, the Antigravity UI stays 100% unmodified with **no injected Settings DOM sections**. Instead, open the **Custom AI Models** modal on demand from anywhere:
 
 - **Keyboard Shortcut**: Press **`Ctrl+Alt+M`** (Windows/Linux) or **`Cmd+Option+M`** (macOS)
 - **System Tray Menu**: Right-click the Antigravity tray icon → **⚙ Manage Custom Models (Ctrl+Alt+M)**
@@ -37,14 +39,14 @@ Inside the modal you can:
 
 ### 3. Connect to WSL 2 (Windows)
 
-Antigravity v2.23.0 includes built-in WSL 2 support on Windows:
+Antigravity v2.31.0 includes built-in WSL 2 support on Windows:
 - Open **File → Connect to WSL** or right-click the **System Tray icon → Connect to WSL** and choose a WSL 2 distro (automatically downloads and SHA-256 verifies the Linux `language_server` into `~/.antigravity-server/bin/<version>/`).
 - Switch back at any time via **Reopen Locally**, or launch directly with `--wsl-distro=<DistroName>` / `ANTIGRAVITY_WSL_DISTRO=<DistroName>`.
 
-## Gravity Auto Switch — Routing Status in v2.23.0
+## Gravity Auto Switch — Routing Status in v2.31.0
 
 > [!NOTE]
-> **Status in v2.23.0**: To keep the Antigravity UI completely clean and leave full manual control over model selection, **automatic chat rerouting (`resolveAutoSwitchModel`) and injected Auto Switch UI cards are disabled in v2.23.0**. Your manually selected model in the chat dropdown is always used directly. The Auto Switch router, verifier, and unit tests remain in [src/autoSwitch/](src/autoSwitch) and [docs/gravity-auto-switch.md](docs/gravity-auto-switch.md) for reference.
+> **Status in v2.31.0**: To keep the Antigravity UI completely clean and leave full manual control over model selection, **automatic chat rerouting (`resolveAutoSwitchModel`) and injected Auto Switch UI cards are disabled in v2.31.0**. Your manually selected model in the chat dropdown is always used directly. The Auto Switch router, verifier, and unit tests remain in [src/autoSwitch/](src/autoSwitch) and [docs/gravity-auto-switch.md](docs/gravity-auto-switch.md) for reference.
 
 ## How It Works
 
@@ -172,7 +174,7 @@ The proxy automatically detects DSML blocks, parses them into Gemini-format `fun
 
 Claude models (`anthropic` provider and Anthropic-compatible endpoints such as `deepseek`, `kimi`, `fireworks`, `lmstudio`, `llamacpp`, `wafer`, `zai`) return tool calls as `tool_use` content blocks. The proxy maps these to Gemini-format `functionCall` parts, sets `finishReason: "TOOL_CALL"`, and stores tool call IDs for later matching with `functionResponse` objects in subsequent turns. Both streaming (SSE `content_block_start`/`content_block_delta`) and non-streaming responses are fully handled.
 
-In v2.23.0, `normalizeSchemaForAnthropic()` converts Gemini tool parameter schemas (uppercase types, `nullable`, `propertyOrdering`, missing property types, and invalid `required` entries) into valid JSON Schema Draft 2020-12. Requests use `anthropic-version: 2023-06-01` and optionally include `anthropic-workspace-id` when `workspaceId`, `anthropicWorkspaceId`, or `ANTHROPIC_WORKSPACE_ID` is configured.
+In v2.23.0+ (and v2.31.0), `normalizeSchemaForAnthropic()` converts Gemini tool parameter schemas (uppercase types, `nullable`, `propertyOrdering`, missing property types, and invalid `required` entries) into valid JSON Schema Draft 2020-12. Requests use `anthropic-version: 2023-06-01` and optionally include `anthropic-workspace-id` when `workspaceId`, `anthropicWorkspaceId`, or `ANTHROPIC_WORKSPACE_ID` is configured.
 
 ### Security: API Key Encryption
 
@@ -276,16 +278,21 @@ antigravity-add-model/
 │   ├── preload.ts                 # ContextBridge APIs + on-demand Custom AI Models modal
 │   ├── main.ts                    # App lifecycle + WSL setup + SetCloudCodeURL blocking
 │   ├── constants.ts               # Port & cert constants
-│   ├── paths.ts                   # Path utilities
+│   ├── paths.ts                   # Path utilities & user state path resolvers
 │   ├── storage.ts                 # StorageManager class
+│   ├── windowState.ts             # Multi-window monitor tracking & cascading persistence
+│   ├── faviconStore.ts            # Favicon storage & antigravity-favicon:// scheme
+│   ├── debugConsole.ts            # Debug console tracking
+│   ├── externalUrl.ts             # Safe external URL routing
+│   ├── hubZoom.ts                 # Window zoom management & storage
 │   ├── menu.ts                    # Application menu + Manage Custom Models + WSL Connect
 │   ├── tray.ts                    # System tray + dynamic menu item insertion
 │   ├── updater.ts                 # Auto-updater
-│   ├── customScheme.ts            # Plugin scheme handler
+│   ├── customScheme.ts            # Plugin & favicon custom scheme handlers
 │   ├── keybindings.ts             # Keyboard shortcuts
 │   ├── loadingOverlay.ts          # Loading screen overlay
 │   ├── types.ts / types.d.ts      # Type definitions
-│   ├── utils.ts                   # Window management, zoom persistence & utilities
+│   ├── utils.ts                   # Composite window (curtain+hub), zoom & utilities
 │   ├── services/
 │   │   └── settingsService.ts
 │   ├── ideInstall/                # IDE installation wizard
@@ -314,8 +321,9 @@ antigravity-add-model/
 ├── repatch-ide.bat                # One-click build & deploy (IDE only)
 ├── repatch.bat                    # One-click build & deploy (alias for deploy.ps1)
 ├── repack.ps1                     # ASAR repack script
-├── package.json                   # Electron app manifest (v2.23.0)
-└── README.md
+├── package.json                   # Electron app manifest (v2.31.0)
+├── README.md                      # English documentation
+└── README.fa.md                   # Persian documentation (راهنمای فارسی)
 ```
 
 ## Supported Providers
@@ -605,11 +613,11 @@ Here is an example of a **fully loaded** `custom_models.json` file configuring *
 | `timeout` | (Optional) Request timeout in milliseconds. Default: `120000` (2 minutes). |
 | `maxRetries` | (Optional) Maximum retry attempts for rate-limited/failed requests. Default: `3`. |
 
-## UI Features (v2.23.0 On-Demand Modal)
+## UI Features (v2.31.0 On-Demand Modal)
 
 ### Opening the Custom AI Models Modal
 
-To keep Antigravity's native interface completely unmodified (**Zero DOM Pollution**), v2.23.0 does not inject elements into Settings. Open the modal on demand via:
+To keep Antigravity's native interface completely unmodified (**Zero DOM Pollution**), v2.31.0 does not inject elements into Settings. Open the modal on demand via:
 
 - **Shortcut**: `Ctrl+Alt+M` (Windows/Linux) or `Cmd+Option+M` (macOS)
 - **System Tray**: Right-click tray icon → **⚙ Manage Custom Models (Ctrl+Alt+M)**
@@ -757,6 +765,15 @@ Set `DEBUG=antigravity:*` for verbose logging (debug level captures stream parse
 ---
 
 ## Changelog
+
+### v2.31.0 — Antigravity v2.31.0 Architecture & Subsystem Compatibility
+- **Official v2.31.0 Compatibility**: Updated codebase and build configuration to fully match official Google Antigravity **v2.31.0** (and IDE **v1.107.0**).
+- **Composite Window Architecture**: Adapted window management to support Antigravity 2.31.0's `BaseWindow` + `WebContentsView` architecture (`curtainView` and `hubWcv`), multi-window tracking, and monitor-aware window positioning with cascade logic (`src/windowState.ts`).
+- **In-App Browser & Script Jail Sandbox**: Integrated and proxied Antigravity 2.31.0's in-app webview subsystems (`wcvBrowserRegistry`, `webviewBrowser`, `scriptJail`, `deviceChooser`, `beyondcorpPac`, and WebAuthn platform authenticator) without breaking custom model injection.
+- **Favicon & Custom Schemes**: Added `faviconStore` (`src/faviconStore.ts`) and registered `FAVICON_SCHEME` (`antigravity-favicon://`) with security checks and host validation.
+- **Desktop Mic & Webview Preload APIs**: Updated `preload.ts` to expose `desktopMicAPI` on `contextBridge.exposeInMainWorld('desktopMic', ...)` and full webview controls on `electronNativeAPI`, matching 2.31.0 renderer expectations.
+- **Environment & Process Management**: Implemented `prefetchShellEnv()` and `takeShellEnv()` to preserve login shell environments on non-Windows platforms while maintaining local proxy port injection (`http://localhost:50999/v1internal`).
+- **Dependencies & Build Stability**: Bumped `package.json` to 2.31.0, upgraded `@connectrpc/connect-node` to `^2.2.0`, `electron-updater` to `^6.8.9`, `shell-env` to `^4.0.3`, resolved all TypeScript compilation errors, and verified 189/189 tests pass.
 
 ### v2.23.0 — Antigravity v2.23.0 & IDE v1.107.0 Compatibility, WSL 2 Support & On-Demand UI
 - **Compatibility**: Updated `package.json`, `languageServer.ts`, `preload.ts`, `ipcHandlers.ts`, `utils.ts`, and deploy scripts for **Antigravity v2.23.0** and **Antigravity IDE v1.107.0**.

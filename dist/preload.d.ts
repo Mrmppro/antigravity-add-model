@@ -117,6 +117,53 @@ interface ElectronNativeAPI {
     revealInFilePicker: (path: string) => Promise<void>;
     showContextMenu: (items: ContextMenuItem[]) => Promise<string | null>;
     closeContextMenu: () => Promise<void>;
+    onWebviewDeviceChooserEvent?: (callback: (payload: any) => void) => () => void;
+    respondWebviewDeviceChooser?: (requestId: any, resolution: any) => Promise<any>;
+    getWebviewMemoryUsage?: (webContentsIds: any) => Promise<any>;
+    getDefaultDownloadDirectory?: () => Promise<string>;
+    executeJavaScriptInIsolatedWorld?: (wcId: any, worldId: any, code: any) => Promise<any>;
+    scriptJailProtocol?: number;
+    listWebviewFrames?: (wcId: any) => Promise<any>;
+    executeJavaScriptInFrameIsolatedWorld?: (wcId: any, frameId: any, code: any, expectedOrigin: any) => Promise<any>;
+    runScriptInJail?: (req: any) => Promise<any>;
+    abortScriptJail?: (jailId: any) => Promise<any>;
+    warmScriptJail?: () => Promise<any>;
+    subscribeWebviewSecurityState?: (webContentsId: any, callback: any) => () => void;
+    allowWebviewCertificate?: (webContentsId: any, url: any) => Promise<any>;
+    clearWebviewSiteData?: (webContentsId: any, origin: any) => Promise<any>;
+    onWebviewOpenNewTab?: (callback: (url: string, webContentsId: number) => void) => () => void;
+    setWebviewDownloadDirectory?: (webContentsId: any, downloadDir: any) => Promise<any>;
+    setWebviewAgentControlled?: (webContentsId: any, active: any) => Promise<any>;
+    openWebviewDownload?: (downloadId: any) => Promise<any>;
+    showWebviewDownloadInFolder?: (downloadId: any) => Promise<any>;
+    cancelWebviewDownload?: (downloadId: any) => Promise<any>;
+    resolveWebviewDownload?: (downloadId: any, approve: any) => Promise<any>;
+    selectDownloadDirectory?: (defaultPath: any) => Promise<any>;
+    onWebviewFaviconUpdated?: (callback: any) => () => void;
+    onWebviewDownloadProgress?: (callback: any) => () => void;
+    setWebviewDialogPolicy?: (webContentsId: any, policy: any) => Promise<any>;
+    handleWebviewDialog?: (webContentsId: any, decision: any) => Promise<any>;
+    onWebviewDialogOpening?: (callback: any) => () => void;
+    getWebviewNetworkRequests?: (webContentsId: any) => Promise<any>;
+    clearWebviewNetworkRequests?: (webContentsId: any) => Promise<any>;
+    onWebviewNetworkRequest?: (callback: any) => () => void;
+    onWebviewPromptRequest?: (callback: any) => () => void;
+    respondWebviewPrompt?: (promptId: any, value: any) => Promise<any>;
+    setWebviewFileChooserPolicy?: (webContentsId: any, policy: any) => Promise<any>;
+    handleWebviewFileChooser?: (webContentsId: any, decision: any) => Promise<any>;
+    setWebviewInputFiles?: (webContentsId: any, request: any) => Promise<any>;
+    resolveWebviewUploadFiles?: (request: any) => Promise<any>;
+    onWebviewFileChooserOpened?: (callback: any) => () => void;
+    setWebviewWebMcpEnabled?: (enabled: any) => Promise<any>;
+    listWebviewWebMcpTools?: (webContentsId: any, origin: any) => Promise<any>;
+    callWebviewWebMcpTool?: (webContentsId: any, origin: any, params: any) => Promise<any>;
+    cancelWebviewWebMcpToolCall?: (webContentsId: any, callId: any) => Promise<any>;
+    wcvBrowser?: any;
+}
+interface DesktopMicAPI {
+    getAccessStatus: () => Promise<unknown>;
+    requestAccess: () => Promise<unknown>;
+    openSystemPreferences: () => Promise<unknown>;
 }
 interface IdeAPI {
     isInstalled: () => Promise<boolean>;
@@ -175,6 +222,7 @@ declare global {
         electronNative: ElectronNativeAPI;
         ide: IdeAPI;
         wsl: WslAPI;
+        desktopMic: DesktopMicAPI;
     }
 }
 export {};

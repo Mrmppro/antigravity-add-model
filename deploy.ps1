@@ -3,7 +3,7 @@
 # Run this script from a PowerShell terminal!
 
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  Antigravity v2.23.0 Safe Deploy Script" -ForegroundColor Yellow
+Write-Host "  Antigravity v2.31.0 Safe Deploy Script" -ForegroundColor Yellow
 Write-Host "  MRMPPRO | Customization, MCP, Skills, WSL & Gravity Auto Switch" -ForegroundColor Magenta
 Write-Host "============================================" -ForegroundColor Cyan
 
@@ -386,5 +386,5 @@ Write-Host "  Changes Applied:" -ForegroundColor Gray
 Write-Host "    - MRMPPRO Customization: Models, MCP, Skills & Gravity Auto Switch" -ForegroundColor Magenta
 Write-Host "    - Antigravity IDE: Standalone Proxy & Extension Router" -ForegroundColor Magenta
 Write-Host "    - Model placeholder IDs & Protobuf array/object normalization" -ForegroundColor Gray
-Write-Host "    - Antigravity 2.23.0 & IDE 1.107.0 Compatibility Verified" -ForegroundColor Green
+Write-Host "    - Antigravity 2.31.0 & IDE 1.107.0 Compatibility Verified" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Cyan
