@@ -1,13 +1,53 @@
-# Antigravity Custom Model Enabler (v2.31.0)
+<div align="center">
 
-[English](README.md) | [فارسی](README.fa.md)
+# 🌌 Antigravity Custom Model Enabler (v2.31.0)
 
-> **Unofficial compatibility patch.** This independent project is not affiliated
-> with, endorsed by, or supported by Google. “Google” and “Antigravity” are used
-> only to describe compatible products; their respective trademark owners retain
-> all rights.
+### Run Any External AI Model in Google Antigravity & Antigravity IDE
 
-This repository contains a compatibility patch for **Google Antigravity (v2.31.0)** and **Antigravity IDE (v1.107.0)** that enables external AI models (OpenAI, Anthropic, OpenRouter, DeepSeek, Groq, Mistral, Cerebras, Kimi, Fireworks AI, Ollama, LM Studio, llama.cpp, NVIDIA NIM, Google AI Studio, and any OpenAI-compatible provider) alongside the built-in Gemini models. It embeds a local HTTP proxy into the Electron app, reverse-engineers the Cloud Code internal API (`v1internal`), translates request/response formats between providers, supports WSL 2 remote sessions on Windows, and provides an on-demand **Custom AI Models** modal (`Ctrl+Alt+M` / `Cmd+Option+M`) with zero DOM pollution.
+[![Google Antigravity](https://img.shields.io/badge/Google_Antigravity-v2.31.0-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://github.com/Mrmppro/antigravity-add-model)
+[![Antigravity IDE](https://img.shields.io/badge/Antigravity_IDE-v1.107.0-34A853?style=for-the-badge&logo=visualstudiocode&logoColor=white)](https://github.com/Mrmppro/antigravity-add-model)
+[![Tests Passing](https://img.shields.io/badge/Tests-189_Passed-2ea44f?style=for-the-badge&logo=vitest&logoColor=white)](https://github.com/Mrmppro/antigravity-add-model)
+[![WSL 2](https://img.shields.io/badge/WSL_2-Supported-blueviolet?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/Mrmppro/antigravity-add-model)
+[![Security Vault](https://img.shields.io/badge/Security-AES--256--GCM-critical?style=for-the-badge&logo=security&logoColor=white)](https://github.com/Mrmppro/antigravity-add-model)
+[![UI Clean](https://img.shields.io/badge/UI-Zero_DOM_Pollution-blue?style=for-the-badge&logo=electron&logoColor=white)](https://github.com/Mrmppro/antigravity-add-model)
+
+---
+
+#### 🌐 Choose Your Language / انتخاب زبان / 选择语言 / 言語を選択 / Seleccionar idioma / Choisir la langue
+
+| [🇺🇸 English](README.md) | [🇮🇷 فارسی](README.fa.md) | [🇨🇳 简体中文](README.zh-CN.md) | [🇯🇵 日本語](README.ja.md) |
+| :---: | :---: | :---: | :---: |
+| [🇪🇸 Español](README.es.md) | [🇫🇷 Français](README.fr.md) | [🇩🇪 Deutsch](README.de.md) | [🇷🇺 Русский](README.ru.md) |
+
+---
+
+<p align="center">
+  <img src="assets/chat_model_dropdown.png" alt="Antigravity Custom Model Dropdown" width="80%">
+</p>
+
+</div>
+
+> [!NOTE]
+> **Unofficial compatibility patch.** This independent open-source project is not affiliated with, endorsed by, or supported by Google. “Google” and “Antigravity” are used only to describe compatible products; their respective trademark owners retain all rights.
+
+This repository contains an advanced compatibility patch for **Google Antigravity (v2.31.0)** and **Antigravity IDE (v1.107.0)** that enables external AI models (OpenAI GPT-4o / o1 / o3, Anthropic Claude 3.5 / 3.7 Sonnet, DeepSeek R1 / V3, OpenRouter, Groq, Mistral, Cerebras, Kimi, Fireworks AI, Ollama, LM Studio, llama.cpp, NVIDIA NIM, Google AI Studio, and any OpenAI-compatible provider) alongside the built-in Gemini models.
+
+It embeds a local HTTP proxy into the Electron app, reverse-engineers the Cloud Code internal API (`v1internal`), translates request/response formats and tool calls between providers, supports WSL 2 remote sessions on Windows, and provides an on-demand **Custom AI Models** modal (<kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>M</kbd> / <kbd>Cmd</kbd> + <kbd>Option</kbd> + <kbd>M</kbd>) with **zero DOM pollution**.
+
+---
+
+## ⚡ Key Highlights
+
+| Feature | Description |
+|---|---|
+| 🪟 **Antigravity v2.31.0 Ready** | Fully compatible with 2.31.0's composite `BaseWindow` + `WebContentsView` architecture, `windowState.ts` multi-monitor tracking, and `antigravity-favicon://`. |
+| 🛡️ **Zero DOM Pollution** | No fragile DOM modifications or Settings mutations. The native UI stays 100% pristine; management modal opens strictly on demand. |
+| 🔒 **Encrypted Key Vault** | All API credentials are encrypted with hardware-backed **AES-256-GCM** via Electron `safeStorage`. |
+| 🤖 **Agentic Tool Calling** | Full bidirectional tool calling (Function Calling & CLI command translation) for Claude, OpenAI, and DeepSeek. |
+| 🐧 **Native WSL 2 Support** | Seamless Windows WSL 2 Linux distribution connection with auto-provisioned and SHA-256 verified `language_server`. |
+| 📦 **15+ Provider Presets** | Instant presets for OpenAI, Anthropic, OpenRouter, DeepSeek, Groq, Mistral, Ollama, LM Studio, and more. |
+
+---
 
 ## How to Use (Quick Start — v2.31.0)
 
@@ -323,7 +363,13 @@ antigravity-add-model/
 ├── repack.ps1                     # ASAR repack script
 ├── package.json                   # Electron app manifest (v2.31.0)
 ├── README.md                      # English documentation
-└── README.fa.md                   # Persian documentation (راهنمای فارسی)
+├── README.fa.md                   # Persian documentation (راهنمای فارسی)
+├── README.zh-CN.md                # Simplified Chinese documentation (简体中文)
+├── README.ja.md                   # Japanese documentation (日本語)
+├── README.es.md                   # Spanish documentation (Español)
+├── README.fr.md                   # French documentation (Français)
+├── README.de.md                   # German documentation (Deutsch)
+└── README.ru.md                   # Russian documentation (Русский)
 ```
 
 ## Supported Providers

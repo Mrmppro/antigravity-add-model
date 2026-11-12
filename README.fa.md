@@ -1,12 +1,51 @@
-# فعال‌ساز مدل‌های دلخواه در گوگل آنتی‌گرویتی (نسخه ۲.۳۱.۰)
+<div align="center">
 
-[English](README.md) | [فارسی](README.fa.md)
+# 🌌 فعال‌ساز مدل‌های دلخواه در گوگل آنتی‌گرویتی (نسخه ۲.۳۱.۰)
 
+### اتصال هر مدل هوش مصنوعی دلخواه به Google Antigravity و Antigravity IDE
+
+[![Google Antigravity](https://img.shields.io/badge/Google_Antigravity-v2.31.0-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://github.com/Mrmppro/antigravity-add-model)
+[![Antigravity IDE](https://img.shields.io/badge/Antigravity_IDE-v1.107.0-34A853?style=for-the-badge&logo=visualstudiocode&logoColor=white)](https://github.com/Mrmppro/antigravity-add-model)
+[![Tests Passing](https://img.shields.io/badge/Tests-189_Passed-2ea44f?style=for-the-badge&logo=vitest&logoColor=white)](https://github.com/Mrmppro/antigravity-add-model)
+[![WSL 2](https://img.shields.io/badge/WSL_2-Supported-blueviolet?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/Mrmppro/antigravity-add-model)
+[![Security Vault](https://img.shields.io/badge/Security-AES--256--GCM-critical?style=for-the-badge&logo=security&logoColor=white)](https://github.com/Mrmppro/antigravity-add-model)
+[![UI Clean](https://img.shields.io/badge/UI-Zero_DOM_Pollution-blue?style=for-the-badge&logo=electron&logoColor=white)](https://github.com/Mrmppro/antigravity-add-model)
+
+---
+
+#### 🌐 انتخاب زبان / Choose Your Language / 选择语言 / 言語を選択 / Seleccionar idioma / Choisir la langue
+
+| [🇺🇸 English](README.md) | [🇮🇷 فارسی](README.fa.md) | [🇨🇳 简体中文](README.zh-CN.md) | [🇯🇵 日本語](README.ja.md) |
+| :---: | :---: | :---: | :---: |
+| [🇪🇸 Español](README.es.md) | [🇫🇷 Français](README.fr.md) | [🇩🇪 Deutsch](README.de.md) | [🇷🇺 Русский](README.ru.md) |
+
+---
+
+<p align="center">
+  <img src="assets/chat_model_dropdown.png" alt="منوی انتخاب مدل در آنتی‌گرویتی" width="80%">
+</p>
+
+</div>
+
+> [!NOTE]
 > **سلب مسئولیت (پچ غیررسمی):** این پروژه یک ابزار مستقل و متن‌باز است و هیچ‌گونه وابستگی رسمی به گوگل ندارد. نام‌های «Google» و «Antigravity» صرفاً جهت توصیف نرم‌افزارهای سازگار استفاده شده‌اند و کلیه حقوق مالکیت آنها متعلق به دارندگان نشان‌های تجاری مربوطه است.
 
 این مخزن شامل پچ سازگاری کامل برای نسخه جدید **Google Antigravity (v2.31.0)** و **Antigravity IDE (v1.107.0)** است که امکان استفاده همزمان از مدل‌های هوش مصنوعی خارجی (مانند OpenAI GPT-4o / o1 / o3، Anthropic Claude 3.5 / 3.7 Sonnet، DeepSeek R1 / V3، OpenRouter، Groq، Mistral، Cerebras، Kimi، Fireworks AI، Ollama، LM Studio، llama.cpp، NVIDIA NIM، Google AI Studio و هر API سازگار با فرمت OpenAI) را در کنار مدل‌های داخلی جمینای فراهم می‌آورد.
 
-این ابزار با تعبیه یک پراکسی HTTP محلی ایمن درون اپلیکیشن الکترون، مهندسی معکوس API داخلی کلودکد (`v1internal`)، ترجمه فرمت درخواست‌ها/پاسخ‌ها و Tool Calling، پشتیبانی از محیط WSL 2 در ویندوز، و ارائه یک پنجره مودال مستقل مدیریت مدل‌ها با کلید میانبر **`Ctrl+Alt+M`** بدون هیچ‌گونه دستکاری مخرب در رابط کاربری اصلی کار می‌کند.
+این ابزار با تعبیه یک پراکسی HTTP محلی ایمن درون اپلیکیشن الکترون، مهندسی معکوس API داخلی کلودکد (`v1internal`)، ترجمه فرمت درخواست‌ها/پاسخ‌ها و Tool Calling، پشتیبانی از محیط WSL 2 در ویندوز، و ارائه یک پنجره مودال مستقل مدیریت مدل‌ها با کلید میانبر <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>M</kbd> بدون هیچ‌گونه دستکاری مخرب در رابط کاربری اصلی کار می‌کند.
+
+---
+
+## ⚡ قابلیت‌های کلیدی
+
+| قابلیت | شرح عملکرد |
+|---|---|
+| 🪟 **سازگاری کامل با Antigravity 2.31.0** | هماهنگ با معماری پنجره‌های ترکیبی `BaseWindow` + `WebContentsView`، ذخیره‌سازی ابعاد پنجره‌ها در چند مانیتور (`windowState.ts`) و پروتکل اختصاصی `antigravity-favicon://`. |
+| 🛡️ **عدم دستکاری DOM (Zero DOM Pollution)** | هیچ عنصری در Settings برنامه تزریق نمی‌شود. ظاهر بومی برنامه ۱۰۰٪ دست‌نخورده باقی مانده و پنل مدیریت مدل‌ها کاملاً برحسب تقاضا باز می‌شود. |
+| 🔒 **رمزنگاری پیشرفته کلیدها** | ذخیره امن کلیدهای API با الگوریتم سخت‌افزاری **AES-256-GCM** از طریق Electron `safeStorage`. |
+| 🤖 **پشتیبانی کامل از Tool Calling** | ترجمه بی‌درنگ فراخوانی ابزارها و فرامین ترمینال بین استانداردهای Claude، OpenAI و Gemini. |
+| 🐧 **اتصال یکپارچه به WSL 2** | اتصال خودکار به توزیع‌های لینوکس WSL 2 در ویندوز به همراه اعتبارسنجی SHA-256 سرور لینوکسی. |
+| 📦 **بیش از ۱۵ ارائه‌دهنده پیش‌فرض** | پیش‌تنظیمات آماده برای OpenAI، Anthropic، OpenRouter، DeepSeek، Ollama، Groq و... |
 
 ---
 
@@ -136,8 +175,14 @@ antigravity-add-model/
 ├── repatch-antigravity.bat        # پچ یک-کلیکی نسخه مستقل
 ├── repatch-ide.bat                # پچ یک-کلیکی نسخه IDE
 ├── package.json                   # مانیفست پروژه (نسخه ۲.۳۱.۰)
-├── README.md                      # راهنمای انگلیسی
-└── README.fa.md                   # راهنمای فارسی
+├── README.md                      # راهنمای انگلیسی (English)
+├── README.fa.md                   # راهنمای فارسی
+├── README.zh-CN.md                # راهنمای چینی ساده‌شده (简体中文)
+├── README.ja.md                   # راهنمای ژاپنی (日本語)
+├── README.es.md                   # راهنمای اسپانیایی (Español)
+├── README.fr.md                   # راهنمای فرانسوی (Français)
+├── README.de.md                   # راهنمای آلمانی (Deutsch)
+└── README.ru.md                   # راهنمای روسی (Русский)
 ```
 
 ---
